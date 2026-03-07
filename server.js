@@ -449,11 +449,258 @@ app.get('/auth/drive/callback', async (req, res) => {
   } catch (err) { res.send(`<html><body style="background:#0a0a0f;color:red;padding:40px;font-family:sans-serif"><h2>${err.message}</h2></body></html>`); }
 });
 
+// ========== SERVER-SIDE SCHEDULER ==========
+const SCHED_FILE = path.join(__dirname, 'schedule.json');
+
+function loadSchedConfig() {
+  try {
+    if (fs.existsSync(SCHED_FILE)) return JSON.parse(fs.readFileSync(SCHED_FILE, 'utf8'));
+  } catch {}
+  return { enabled: false, slots: [], days: [0,1,2,3,4,5,6], folderId: '', audioFolderId: '', maxVideos: 3, privacy: 'private', deleteAfterUpload: true, aiService: null, aiKey: null };
+}
+
+function saveSchedConfig(cfg) {
+  fs.writeFileSync(SCHED_FILE, JSON.stringify(cfg, null, 2));
+}
+
+// Save schedule config from frontend
+app.post('/api/schedule/save', (req, res) => {
+  const cfg = { ...loadSchedConfig(), ...req.body };
+  saveSchedConfig(cfg);
+  if (cfg.enabled) startServerScheduler();
+  else stopServerScheduler();
+  res.json({ success: true, config: cfg });
+});
+
+// Get current schedule config
+app.get('/api/schedule/config', (req, res) => {
+  res.json(loadSchedConfig());
+});
+
+// Manual trigger
+app.post('/api/schedule/run-now', async (req, res) => {
+  const cfg = { ...loadSchedConfig(), ...req.body };
+  const jobId = await triggerAutoUpload(cfg);
+  res.json({ jobId });
+});
+
+let schedTimer = null;
+let lastRunMap = {}; // slot -> date string
+
+function startServerScheduler() {
+  stopServerScheduler();
+  schedTimer = setInterval(checkServerSchedule, 30000); // check every 30 sec
+  checkServerSchedule();
+  console.log('[SCHED] Server scheduler started');
+}
+
+function stopServerScheduler() {
+  if (schedTimer) { clearInterval(schedTimer); schedTimer = null; }
+  console.log('[SCHED] Server scheduler stopped');
+}
+
+async function checkServerSchedule() {
+  const cfg = loadSchedConfig();
+  if (!cfg.enabled || !cfg.slots?.length) return;
+
+  const now = new Date();
+  const day = now.getDay();
+  if (!cfg.days?.includes(day)) return;
+
+  const cur = String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0');
+  const today = now.toDateString();
+
+  for (const slot of cfg.slots) {
+    if (!slot.on) continue;
+    if (slot.time !== cur) continue;
+    const key = slot.time + '_' + today;
+    if (lastRunMap[key]) continue; // already ran today at this time
+
+    lastRunMap[key] = true;
+    console.log('[SCHED] Triggering upload for slot:', slot.time);
+    await triggerAutoUpload(cfg);
+  }
+}
+
+async function triggerAutoUpload(cfg) {
+  const jobId = createJob();
+
+  (async () => {
+    try {
+      const fetch = (await import('node-fetch')).default;
+      const t = loadTokens();
+      const driveToken = t.drive_access_token;
+      const ytToken = t.access_token;
+
+      if (!driveToken) throw new Error('Drive সংযুক্ত নয়');
+      if (!ytToken) throw new Error('YouTube সংযুক্ত নয়');
+      if (!cfg.folderId) throw new Error('Video Folder ID নেই');
+
+      // List videos from Drive
+      const q = encodeURIComponent(`'${cfg.folderId}' in parents and trashed=false`);
+      const listRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,mimeType,size)&pageSize=100`, {
+        headers: { 'Authorization': `Bearer ${driveToken}` }
+      });
+      const listData = await listRes.json();
+      const allVideos = (listData.files || []).filter(f => f.mimeType?.includes('video') || f.name?.match(/\.(mp4|mov|avi|mkv|webm)$/i));
+
+      if (!allVideos.length) { jobs[jobId] = { status: 'error', error: 'Drive-এ কোনো ভিডিও নেই' }; return; }
+
+      // Shuffle + limit
+      const videos = allVideos.sort(() => Math.random() - 0.5).slice(0, cfg.maxVideos || 3);
+      console.log('[SCHED] Processing', videos.length, 'videos');
+
+      // Get audio files
+      let audioFiles = [];
+      if (cfg.audioFolderId) {
+        const aq = encodeURIComponent(`'${cfg.audioFolderId}' in parents and trashed=false`);
+        const ar = await fetch(`https://www.googleapis.com/drive/v3/files?q=${aq}&fields=files(id,name,mimeType)&pageSize=50`, {
+          headers: { 'Authorization': `Bearer ${driveToken}` }
+        });
+        const ad = await ar.json();
+        audioFiles = (ad.files || []).filter(f => f.name?.match(/\.(mp3|m4a|wav|aac|ogg)$/i));
+        console.log('[SCHED] Found', audioFiles.length, 'audio files');
+      }
+
+      const results = [];
+
+      for (const video of videos) {
+        const tempFiles = [];
+        console.log('[SCHED] Processing:', video.name);
+
+        try {
+          // Download video
+          const dlRes = await fetch(`https://www.googleapis.com/drive/v3/files/${video.id}?alt=media`, {
+            headers: { 'Authorization': `Bearer ${driveToken}` }
+          });
+          if (!dlRes.ok) throw new Error('Drive download failed');
+          const videoPath = path.join(TEMP_DIR, `sched_${Date.now()}_${video.id}.mp4`);
+          fs.writeFileSync(videoPath, await dlRes.buffer());
+          tempFiles.push(videoPath);
+
+          // Mute original video
+          const mutedPath = path.join(TEMP_DIR, `sched_muted_${Date.now()}.mp4`);
+          await execAsync(`ffmpeg -i "${videoPath}" -an -c:v copy -y "${mutedPath}"`, { timeout: 60000 });
+          tempFiles.push(mutedPath);
+
+          let finalPath = mutedPath;
+
+          // Merge audio
+          if (audioFiles.length > 0) {
+            const randomAudio = audioFiles[Math.floor(Math.random() * audioFiles.length)];
+            const audioDlRes = await fetch(`https://www.googleapis.com/drive/v3/files/${randomAudio.id}?alt=media`, {
+              headers: { 'Authorization': `Bearer ${driveToken}` }
+            });
+            const audioPath = path.join(TEMP_DIR, `sched_audio_${Date.now()}${path.extname(randomAudio.name)}`);
+            fs.writeFileSync(audioPath, await audioDlRes.buffer());
+            tempFiles.push(audioPath);
+
+            const mergedPath = path.join(TEMP_DIR, `sched_merged_${Date.now()}.mp4`);
+            await execAsync(`ffmpeg -i "${mutedPath}" -stream_loop -1 -i "${audioPath}" -map 0:v -map 1:a -c:v copy -c:a aac -shortest -y "${mergedPath}"`, { timeout: 120000 });
+            tempFiles.push(mergedPath);
+            finalPath = mergedPath;
+            console.log('[SCHED] Audio merged ✓');
+          }
+
+          // AI meta
+          const rawTitle = video.name.replace(/\.[^.]+$/, '').replace(/[_-]/g, ' ');
+          let meta = { title: rawTitle, description: '', hashtags: [], tags: [] };
+
+          if (cfg.aiService && cfg.aiKey) {
+            try {
+              const prompt = `YouTube Shorts এর জন্য বাংলা viral metadata: "${rawTitle}". শুধু JSON: {"title":"ক্লিকবেইট ইমোজি সহ","description":"৩ লাইন","hashtags":["#ট্যাগ",...১৫টি],"tags":["tag",...২০টি]}`;
+              let aiText = '';
+              if (cfg.aiService === 'gemini') {
+                const ar = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${cfg.aiKey}`, {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+                });
+                aiText = (await ar.json()).candidates?.[0]?.content?.parts?.[0]?.text || '';
+              } else if (cfg.aiService === 'grok') {
+                const ar = await fetch('https://api.x.ai/v1/chat/completions', {
+                  method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.aiKey}` },
+                  body: JSON.stringify({ model: 'grok-3-mini', messages: [{ role: 'user', content: prompt }], max_tokens: 800 })
+                });
+                aiText = (await ar.json()).choices?.[0]?.message?.content || '';
+              }
+              if (aiText) {
+                const parsed = JSON.parse(aiText.replace(/```json\n?/g,'').replace(/```\n?/g,'').trim());
+                meta = { ...meta, ...parsed };
+              }
+            } catch(e) { console.warn('[SCHED] AI failed:', e.message); }
+          }
+
+          // Upload YouTube
+          const fullDesc = `${meta.description || ''}\n\n${(meta.hashtags || []).join(' ')}`.trim();
+          const ytMeta = {
+            snippet: { title: (meta.title || rawTitle).substring(0, 100), description: fullDesc.substring(0, 5000), tags: (meta.tags || []).slice(0, 30), categoryId: '22' },
+            status: { privacyStatus: cfg.privacy || 'private', selfDeclaredMadeForKids: false }
+          };
+
+          const fileSize = fs.statSync(finalPath).size;
+          const initRes = await fetch('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${ytToken}`, 'Content-Type': 'application/json', 'X-Upload-Content-Type': 'video/mp4', 'X-Upload-Content-Length': fileSize },
+            body: JSON.stringify(ytMeta)
+          });
+          if (!initRes.ok) throw new Error('YT init: ' + await initRes.text());
+
+          const uploadUrl = initRes.headers.get('location');
+          const videoBuf = fs.readFileSync(finalPath);
+          const upRes = await fetch(uploadUrl, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'video/mp4', 'Content-Length': videoBuf.length },
+            body: videoBuf
+          });
+          if (!upRes.ok) throw new Error('YT upload: ' + await upRes.text());
+          const ytData = await upRes.json();
+
+          // Cleanup temp
+          tempFiles.forEach(f => { try { if(fs.existsSync(f)) fs.unlinkSync(f); } catch {} });
+
+          // Delete from Drive
+          if (cfg.deleteAfterUpload) {
+            await fetch(`https://www.googleapis.com/drive/v3/files/${video.id}`, {
+              method: 'DELETE', headers: { 'Authorization': `Bearer ${driveToken}` }
+            });
+          }
+
+          results.push({ file: video.name, videoId: ytData.id, url: `https://youtu.be/${ytData.id}`, title: meta.title, status: 'ok' });
+          console.log('[SCHED] Uploaded:', video.name, '→', ytData.id);
+
+        } catch(e) {
+          tempFiles.forEach(f => { try { if(fs.existsSync(f)) fs.unlinkSync(f); } catch {} });
+          results.push({ file: video.name, error: e.message, status: 'error' });
+          console.error('[SCHED] Error:', video.name, e.message);
+        }
+
+        await new Promise(r => setTimeout(r, 3000));
+      }
+
+      jobs[jobId] = { status: 'done', result: { total: videos.length, results } };
+      console.log('[SCHED] Done!', results.filter(r=>r.status==='ok').length, '/', videos.length, 'uploaded');
+
+    } catch(err) {
+      console.error('[SCHED] Fatal:', err.message);
+      jobs[jobId] = { status: 'error', error: err.message };
+    }
+  })();
+
+  return jobId;
+}
+
 // ========== START ==========
 app.listen(PORT, () => {
   console.log(`🚀 YouTube Automation Server running on port ${PORT}`);
   try { require('child_process').execSync('yt-dlp --version'); console.log('✓ yt-dlp available'); } catch { console.warn('✗ yt-dlp not found'); }
   try { require('child_process').execSync('ffmpeg -version 2>&1 | head -1'); console.log('✓ ffmpeg available'); } catch { console.warn('✗ ffmpeg not found'); }
+
+  // Auto-start scheduler if was enabled
+  const cfg = loadSchedConfig();
+  if (cfg.enabled) {
+    console.log('[SCHED] Auto-starting scheduler from saved config...');
+    startServerScheduler();
+  }
 });
 
 // ========== DRIVE AUTO UPLOAD SYSTEM ==========
@@ -730,7 +977,7 @@ app.post('/api/drive/auto-upload', async (req, res) => {
   })();
 });
 
-// ========== KUAISHOU DOWNLOADER (via yt-dlp) ==========
+// ========== KUAISHOU DOWNLOADER (HTML scraping) ==========
 app.post('/api/kuaishou/download', async (req, res) => {
   const { url, mute = true } = req.body;
   if (!url) return res.status(400).json({ error: 'URL required' });
@@ -740,45 +987,109 @@ app.post('/api/kuaishou/download', async (req, res) => {
 
   (async () => {
     try {
-      const outTemplate = path.join(TEMP_DIR, `ks_${jobId}.%(ext)s`);
-      const cmd = `yt-dlp -f "best[ext=mp4]/best" --merge-output-format mp4 --no-playlist --retries 3 --socket-timeout 30 --no-warnings -o "${outTemplate}" "${url}"`;
+      const fetch = (await import('node-fetch')).default;
 
-      console.log('[KS] Downloading:', url);
-      await execAsync(cmd, { timeout: 120000 });
+      // Step 1: Resolve short URL and get full page HTML
+      const headers = {
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 12; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'Referer': 'https://www.kuaishou.com/'
+      };
 
-      const files = fs.readdirSync(TEMP_DIR).filter(f => f.startsWith(`ks_${jobId}`));
-      if (!files.length) throw new Error('ডাউনলোড হয়নি');
+      const pageRes = await fetch(url, { redirect: 'follow', headers });
+      const finalUrl = pageRes.url;
+      const html = await pageRes.text();
+      console.log('[KS] Final URL:', finalUrl);
 
-      let videoPath = path.join(TEMP_DIR, files[0]);
-
-      // Get title
+      // Step 2: Extract video URL from HTML
+      let videoUrl = null;
       let title = 'Kuaishou_video';
-      try {
-        const { stdout } = await execAsync(`yt-dlp --get-title --no-warnings "${url}"`, { timeout: 30000 });
-        title = stdout.trim() || title;
-      } catch {}
+      let thumbnail = null;
 
-      // Mute
-      if (mute) {
-        const mutedPath = path.join(TEMP_DIR, `ks_muted_${jobId}.mp4`);
-        await execAsync(`ffmpeg -i "${videoPath}" -an -c:v copy -y "${mutedPath}"`, { timeout: 60000 });
-        fs.unlinkSync(videoPath);
-        videoPath = mutedPath;
+      // Extract photoId from URL
+      const photoIdMatch = finalUrl.match(/featured\/(\w+)/) || finalUrl.match(/photoId=([a-zA-Z0-9_-]+)/);
+      if (photoIdMatch) {
+        const photoId = photoIdMatch[1];
+        console.log('[KS] photoId:', photoId);
+
+        // Use working GraphQL endpoint (video.kuaishou.com)
+        try {
+          const gqlRes = await fetch("https://video.kuaishou.com/graphql", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              operationName: "visionVideoDetail",
+              variables: { photoId, page: "selected" },
+              query: "query visionVideoDetail($photoId: String, $type: String, $page: String) { visionVideoDetail(photoId: $photoId, type: $type, page: $page) { photo { id caption coverUrl photoUrl } } }"
+            })
+          });
+          const gqlData = await gqlRes.json();
+          console.log('[KS] GraphQL:', JSON.stringify(gqlData).substring(0, 200));
+          const photo = gqlData?.data?.visionVideoDetail?.photo;
+          if (photo?.photoUrl) {
+            videoUrl = photo.photoUrl;
+            title = (photo.caption || photoId).replace(/\n/g, '').trim();
+            thumbnail = photo.coverUrl || null;
+          }
+        } catch (e) { console.warn('[KS] GraphQL error:', e.message); }
       }
 
-      const stat = fs.statSync(videoPath);
+      // Fallback: try HTML patterns
+      if (!videoUrl) {
+        const patterns = [
+          /"photoUrl"\s*:\s*"([^"]+)"/,
+          /"url"\s*:\s*"(https:\/\/[^"]*\.mp4[^"]*)"/,
+          /<video[^>]+src="([^"]+)"/,
+        ];
+        for (const p of patterns) {
+          const m = html.match(p);
+          if (m && m[1].includes('mp4')) {
+            videoUrl = m[1].replace(/\\u002F/g, '/').replace(/\\/g, '');
+            break;
+          }
+        }
+      }
+
+      const titleM = html.match(/"caption"\s*:\s*"([^"]+)"/) || html.match(/<title>([^<]+)<\/title>/);
+      if (titleM && !title) title = titleM[1].replace(/\s*[-|].*$/, '').trim();
+
+      if (!videoUrl) throw new Error('Video URL বের করা গেলো না। Video private বা region blocked হতে পারে।');
+
+      // Step 3: Download video
+      console.log('[KS] Downloading video:', videoUrl.substring(0, 80));
+      const vidRes = await fetch(videoUrl, {
+        headers: { 'User-Agent': headers['User-Agent'], 'Referer': 'https://www.kuaishou.com/' }
+      });
+      if (!vidRes.ok) throw new Error('Video download failed: HTTP ' + vidRes.status);
+
+      const outPath = path.join(TEMP_DIR, `ks_${jobId}.mp4`);
+      const buffer = await vidRes.buffer();
+      fs.writeFileSync(outPath, buffer);
+
+      // Step 4: Mute
+      let finalPath = outPath;
+      if (mute) {
+        const mutedPath = path.join(TEMP_DIR, `ks_muted_${jobId}.mp4`);
+        await execAsync(`ffmpeg -i "${outPath}" -an -c:v copy -y "${mutedPath}"`, { timeout: 60000 });
+        fs.unlinkSync(outPath);
+        finalPath = mutedPath;
+      }
+
+      const stat = fs.statSync(finalPath);
       jobs[jobId] = {
         status: 'done',
         result: {
           title: title.substring(0, 100),
-          filename: path.basename(videoPath),
-          filepath: videoPath,
-          thumbnail: null,
+          filename: path.basename(finalPath),
+          filepath: finalPath,
+          thumbnail,
           size: (stat.size / 1024 / 1024).toFixed(1) + 'MB',
           source: 'kuaishou'
         }
       };
       console.log('[KS] Done:', title);
+
     } catch (err) {
       console.error('[KS]', err.message);
       jobs[jobId] = { status: 'error', error: err.message };
@@ -845,5 +1156,189 @@ app.post('/api/kuaishou/bulk', async (req, res) => {
       await new Promise(r => setTimeout(r, 1000));
     }
     jobs[jobId] = { status: 'done', result: { results } };
+  })();
+});
+
+// ========== ZIP EXTRACT + PROCESS ==========
+// Drive-এ ZIP upload করলে extract করে video process করবে
+app.post('/api/drive/zip-upload', async (req, res) => {
+  const { fileId, fileName, audioFolderId, aiService, aiKey, privacy, deleteAfterUpload } = req.body;
+  if (!fileId) return res.status(400).json({ error: 'fileId required' });
+
+  const jobId = createJob();
+  res.json({ jobId, status: 'processing' });
+
+  (async () => {
+    const tempFiles = [];
+    try {
+      const fetch = (await import('node-fetch')).default;
+      const t = loadTokens();
+      const driveToken = t.drive_access_token;
+      const ytToken = t.access_token;
+      if (!driveToken) throw new Error('Drive সংযুক্ত নয়');
+      if (!ytToken) throw new Error('YouTube সংযুক্ত নয়');
+
+      // 1. Download ZIP from Drive
+      console.log('[ZIP] Downloading ZIP from Drive:', fileId);
+      const dlRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+        headers: { 'Authorization': `Bearer ${driveToken}` }
+      });
+      if (!dlRes.ok) throw new Error('ZIP download failed: ' + dlRes.status);
+
+      const zipPath = path.join(TEMP_DIR, `zip_${jobId}.zip`);
+      const buf = await dlRes.buffer();
+      fs.writeFileSync(zipPath, buf);
+      tempFiles.push(zipPath);
+      console.log('[ZIP] Downloaded:', (buf.length / 1024 / 1024).toFixed(1) + 'MB');
+
+      // 2. Extract ZIP
+      const extractDir = path.join(TEMP_DIR, `zip_extracted_${jobId}`);
+      fs.mkdirSync(extractDir, { recursive: true });
+      tempFiles.push(extractDir);
+
+      await execAsync(`unzip -o "${zipPath}" -d "${extractDir}"`, { timeout: 120000 });
+      console.log('[ZIP] Extracted to:', extractDir);
+
+      // 3. Find all video files
+      const { stdout } = await execAsync(`find "${extractDir}" -type f \\( -name "*.mp4" -o -name "*.mov" -o -name "*.avi" -o -name "*.mkv" -o -name "*.webm" \\)`);
+      const videoFiles = stdout.trim().split('\n').filter(Boolean);
+      console.log('[ZIP] Found', videoFiles.length, 'videos');
+
+      if (!videoFiles.length) throw new Error('ZIP-এ কোনো ভিডিও নেই');
+
+      // 4. Get audio files from Drive if audioFolderId provided
+      let audioFiles = [];
+      if (audioFolderId) {
+        const aq = encodeURIComponent(`'${audioFolderId}' in parents and trashed=false`);
+        const ar = await fetch(`https://www.googleapis.com/drive/v3/files?q=${aq}&fields=files(id,name,mimeType)&pageSize=50`, {
+          headers: { 'Authorization': `Bearer ${driveToken}` }
+        });
+        const ad = await ar.json();
+        audioFiles = (ad.files || []).filter(f => f.name?.match(/\.(mp3|m4a|wav|aac|ogg)$/i));
+        console.log('[ZIP] Found', audioFiles.length, 'audio files in Drive');
+      }
+
+      // 5. Process each video
+      const results = [];
+      for (const videoPath of videoFiles) {
+        const videoName = path.basename(videoPath);
+        const videoTemp = [];
+        console.log('[ZIP] Processing:', videoName);
+
+        try {
+          let finalVideoPath = videoPath;
+
+          // Merge random audio if available
+          if (audioFiles.length > 0) {
+            const randomAudio = audioFiles[Math.floor(Math.random() * audioFiles.length)];
+            
+            // Download audio from Drive
+            const audioDlRes = await fetch(`https://www.googleapis.com/drive/v3/files/${randomAudio.id}?alt=media`, {
+              headers: { 'Authorization': `Bearer ${driveToken}` }
+            });
+            const audioPath = path.join(TEMP_DIR, `audio_${jobId}_${Date.now()}${path.extname(randomAudio.name)}`);
+            fs.writeFileSync(audioPath, await audioDlRes.buffer());
+            videoTemp.push(audioPath);
+
+            const mergedPath = path.join(TEMP_DIR, `merged_${jobId}_${Date.now()}.mp4`);
+            await execAsync(`ffmpeg -i "${finalVideoPath}" -stream_loop -1 -i "${audioPath}" -map 0:v -map 1:a -c:v copy -c:a aac -shortest -y "${mergedPath}"`, { timeout: 120000 });
+            videoTemp.push(mergedPath);
+            finalVideoPath = mergedPath;
+            console.log('[ZIP] Audio merged ✓');
+          }
+
+          // Generate AI meta
+          const rawTitle = videoName.replace(/\.[^.]+$/, '').replace(/[_-]/g, ' ');
+          let meta = { title: rawTitle, description: '', hashtags: [], tags: [] };
+
+          if (aiService && aiKey) {
+            try {
+              const prompt = `YouTube Shorts এর জন্য বাংলা viral metadata তৈরি করো: "${rawTitle}". শুধু JSON দাও: {"title":"ক্লিকবেইট টাইটেল ইমোজি সহ","description":"৩ লাইন","hashtags":["#ট্যাগ",...১৫টি],"tags":["tag",...২০টি]}`;
+              let aiText = '';
+              if (aiService === 'gemini') {
+                const ar = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${aiKey}`, {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+                });
+                aiText = (await ar.json()).candidates?.[0]?.content?.parts?.[0]?.text || '';
+              } else if (aiService === 'grok') {
+                const ar = await fetch('https://api.x.ai/v1/chat/completions', {
+                  method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${aiKey}` },
+                  body: JSON.stringify({ model: 'grok-3-mini', messages: [{ role: 'user', content: prompt }], max_tokens: 800 })
+                });
+                aiText = (await ar.json()).choices?.[0]?.message?.content || '';
+              } else if (aiService === 'openai') {
+                const ar = await fetch('https://api.openai.com/v1/chat/completions', {
+                  method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${aiKey}` },
+                  body: JSON.stringify({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: prompt }], max_tokens: 800 })
+                });
+                aiText = (await ar.json()).choices?.[0]?.message?.content || '';
+              }
+              if (aiText) {
+                const parsed = JSON.parse(aiText.replace(/```json\n?/g,'').replace(/```\n?/g,'').trim());
+                meta = { ...meta, ...parsed };
+              }
+            } catch(e) { console.warn('[ZIP] AI failed:', e.message); }
+          }
+
+          // Upload to YouTube
+          const fullDesc = `${meta.description || ''}\n\n${(meta.hashtags || []).join(' ')}`.trim();
+          const ytMeta = {
+            snippet: { title: (meta.title || rawTitle).substring(0, 100), description: fullDesc.substring(0, 5000), tags: (meta.tags || []).slice(0, 30), categoryId: '22' },
+            status: { privacyStatus: privacy || 'private', selfDeclaredMadeForKids: false }
+          };
+
+          const fileSize = fs.statSync(finalVideoPath).size;
+          const initRes = await fetch('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${ytToken}`, 'Content-Type': 'application/json', 'X-Upload-Content-Type': 'video/mp4', 'X-Upload-Content-Length': fileSize },
+            body: JSON.stringify(ytMeta)
+          });
+          if (!initRes.ok) throw new Error('YT init: ' + await initRes.text());
+
+          const uploadUrl = initRes.headers.get('location');
+          const videoBuf = fs.readFileSync(finalVideoPath);
+          const upRes = await fetch(uploadUrl, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'video/mp4', 'Content-Length': videoBuf.length },
+            body: videoBuf
+          });
+          if (!upRes.ok) throw new Error('YT upload: ' + await upRes.text());
+          const ytData = await upRes.json();
+
+          videoTemp.forEach(f => { try { if(fs.existsSync(f)) fs.unlinkSync(f); } catch {} });
+          results.push({ file: videoName, videoId: ytData.id, url: `https://youtu.be/${ytData.id}`, title: meta.title, status: 'ok' });
+          console.log('[ZIP] Uploaded:', videoName, '→', ytData.id);
+
+        } catch(e) {
+          videoTemp.forEach(f => { try { if(fs.existsSync(f)) fs.unlinkSync(f); } catch {} });
+          results.push({ file: videoName, error: e.message, status: 'error' });
+          console.error('[ZIP] Error:', videoName, e.message);
+        }
+
+        await new Promise(r => setTimeout(r, 3000));
+      }
+
+      // Cleanup extracted dir and zip
+      tempFiles.forEach(f => {
+        try { if(fs.existsSync(f)) { if(fs.statSync(f).isDirectory()) fs.rmSync(f, {recursive:true}); else fs.unlinkSync(f); } } catch {}
+      });
+
+      // Delete ZIP from Drive if requested
+      if (deleteAfterUpload) {
+        await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
+          method: 'DELETE', headers: { 'Authorization': `Bearer ${driveToken}` }
+        });
+        console.log('[ZIP] Deleted ZIP from Drive');
+      }
+
+      jobs[jobId] = { status: 'done', result: { total: videoFiles.length, results } };
+      console.log('[ZIP] All done!', results.filter(r=>r.status==='ok').length, '/', videoFiles.length);
+
+    } catch(err) {
+      tempFiles.forEach(f => { try { if(fs.existsSync(f)) { if(fs.statSync(f).isDirectory()) fs.rmSync(f,{recursive:true}); else fs.unlinkSync(f); } } catch {} });
+      console.error('[ZIP] Fatal:', err.message);
+      jobs[jobId] = { status: 'error', error: err.message };
+    }
   })();
 });
