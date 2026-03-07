@@ -790,28 +790,40 @@ app.post('/api/kuaishou/download', async (req, res) => {
 
       if (!photoId) throw new Error('Video ID বের করা গেলো না। URL টা ঠিক আছে?');
 
-      // Call Kuaishou GraphQL
-      const gqlRes = await fetch('https://www.kuaishou.com/graphql', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15',
-          'Referer': 'https://www.kuaishou.com/',
-          'Origin': 'https://www.kuaishou.com'
-        },
-        body: JSON.stringify({
-          operationName: 'visionVideoDetail',
-          variables: { photoId, page: 'selected' },
-          query: `query visionVideoDetail($photoId: String, $type: String, $page: String) {
-            visionVideoDetail(photoId: $photoId, type: $type, page: $page) {
-              photo { id caption coverUrl photoUrl }
-            }
-          }`
-        })
-      });
+      // Try multiple GraphQL endpoints
+      const gqlEndpoints = [
+        'https://www.kuaishou.com/graphql',
+        'https://v.m.chenzhongtech.com/graphql',
+        'https://www.kwai.com/graphql'
+      ];
 
-      const gqlData = await gqlRes.json();
-      const photo = gqlData?.data?.visionVideoDetail?.photo;
+      let photo = null;
+      for (const endpoint of gqlEndpoints) {
+        try {
+          const gqlRes = await fetch(endpoint, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15',
+              'Referer': endpoint.replace('/graphql', '/'),
+              'Origin': endpoint.replace('/graphql', '')
+            },
+            body: JSON.stringify({
+              operationName: 'visionVideoDetail',
+              variables: { photoId, page: 'selected' },
+              query: `query visionVideoDetail($photoId: String, $type: String, $page: String) {
+                visionVideoDetail(photoId: $photoId, type: $type, page: $page) {
+                  photo { id caption coverUrl photoUrl }
+                }
+              }`
+            })
+          });
+          const gqlData = await gqlRes.json();
+          console.log('[KS] GraphQL response from', endpoint, ':', JSON.stringify(gqlData).substring(0, 200));
+          photo = gqlData?.data?.visionVideoDetail?.photo;
+          if (photo?.photoUrl) break;
+        } catch (e) { console.warn('[KS] Endpoint failed:', endpoint, e.message); }
+      }
       if (!photo?.photoUrl) throw new Error('Video URL পাওয়া গেলো না। Video private হতে পারে।');
 
       const videoUrl = photo.photoUrl;
