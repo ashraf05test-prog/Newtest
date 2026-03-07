@@ -25,6 +25,102 @@ if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 // ====== HEALTH ======
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date() }));
 
+
+// ====== OAUTH TOKEN STORAGE ======
+const TOKEN_FILE = path.join(__dirname, 'tokens.json');
+
+function saveTokens(tokens) {
+  fs.writeFileSync(TOKEN_FILE, JSON.stringify(tokens, null, 2));
+  if (tokens.access_token) process.env.YT_ACCESS_TOKEN = tokens.access_token;
+  if (tokens.drive_access_token) process.env.DRIVE_ACCESS_TOKEN = tokens.drive_access_token;
+}
+
+function loadTokens() {
+  try {
+    if (fs.existsSync(TOKEN_FILE)) {
+      const t = JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf8'));
+      if (t.access_token) process.env.YT_ACCESS_TOKEN = t.access_token;
+      if (t.drive_access_token) process.env.DRIVE_ACCESS_TOKEN = t.drive_access_token;
+      return t;
+    }
+  } catch {}
+  return {};
+}
+
+// Load tokens on startup
+loadTokens();
+
+// Check connection status
+app.get('/api/status', (req, res) => {
+  const tokens = loadTokens();
+  res.json({
+    youtube: !!tokens.access_token,
+    drive: !!tokens.drive_access_token,
+    ytChannel: tokens.channel_name || null
+  });
+});
+
+// Disconnect
+app.post('/api/disconnect', (req, res) => {
+  const { service } = req.body;
+  const tokens = loadTokens();
+  if (service === 'youtube') delete tokens.access_token;
+  if (service === 'drive') delete tokens.drive_access_token;
+  saveTokens(tokens);
+  res.json({ success: true });
+});
+
+
+// ====== VIDEO STREAM (for preview) ======
+app.get('/api/stream', (req, res) => {
+  const { file } = req.query;
+  if (!file) return res.status(400).send('No file');
+  
+  const filePath = path.join(TEMP_DIR, path.basename(file));
+  if (!fs.existsSync(filePath)) return res.status(404).send('File not found');
+  
+  const stat = fs.statSync(filePath);
+  const fileSize = stat.size;
+  const range = req.headers.range;
+
+  if (range) {
+    const parts = range.replace(/bytes=/, '').split('-');
+    const start = parseInt(parts[0], 10);
+    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+    const chunksize = (end - start) + 1;
+    const file = fs.createReadStream(filePath, { start, end });
+    res.writeHead(206, {
+      'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': chunksize,
+      'Content-Type': 'video/mp4',
+    });
+    file.pipe(res);
+  } else {
+    res.writeHead(200, {
+      'Content-Length': fileSize,
+      'Content-Type': 'video/mp4',
+    });
+    fs.createReadStream(filePath).pipe(res);
+  }
+});
+
+// ====== LIST TEMP FILES ======
+app.get('/api/files', (req, res) => {
+  try {
+    const files = fs.readdirSync(TEMP_DIR)
+      .filter(f => f.endsWith('.mp4'))
+      .map(f => {
+        const fp = path.join(TEMP_DIR, f);
+        const stat = fs.statSync(fp);
+        return { name: f, size: stat.size, path: fp };
+      });
+    res.json(files);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ====== DOWNLOAD VIDEO ======
 app.post('/api/download', async (req, res) => {
   const { url, quality = 'best', mute = true, removeTikTokWatermark = true } = req.body;
@@ -328,7 +424,8 @@ app.post('/api/upload', async (req, res) => {
   const { filepath, title, description, tags, hashtags, privacy, categoryId, deleteAfter } = req.body;
   
   try {
-    const accessToken = req.headers['authorization']?.replace('Bearer ', '') || process.env.YT_ACCESS_TOKEN;
+    const tokens = loadTokens();
+    const accessToken = req.headers['authorization']?.replace('Bearer ', '') || tokens.access_token || process.env.YT_ACCESS_TOKEN;
     if (!accessToken) throw new Error('YouTube access token required. Please connect YouTube first.');
     
     const fetch = (await import('node-fetch')).default;
@@ -481,28 +578,79 @@ app.get('/auth/youtube/callback', async (req, res) => {
   
   try {
     const fetch = (await import('node-fetch')).default;
+    const clientId = process.env.YT_CLIENT_ID;
+    const clientSecret = process.env.YT_CLIENT_SECRET;
+    const redirectUri = `${process.env.BASE_URL}/auth/youtube/callback`;
+    
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code, client_id: clientId, client_secret: clientSecret,
+        redirect_uri: redirectUri, grant_type: 'authorization_code'
+      })
+    });
+    
+    const tokens = await tokenRes.json();
+    if (!tokens.access_token) throw new Error(JSON.stringify(tokens));
+    
+    // Get channel name
+    let channelName = '';
+    try {
+      const chRes = await fetch('https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true', {
+        headers: { 'Authorization': `Bearer ${tokens.access_token}` }
+      });
+      const chData = await chRes.json();
+      channelName = chData.items?.[0]?.snippet?.title || '';
+    } catch {}
+    
+    // Save tokens persistently
+    const existing = loadTokens();
+    saveTokens({ ...existing, access_token: tokens.access_token, refresh_token: tokens.refresh_token, channel_name: channelName });
+    
+    res.send(`<html><body style="background:#0a0a0f;color:#06d6a0;font-family:sans-serif;text-align:center;padding:40px">
+      <h2>✅ YouTube সংযুক্ত হয়েছে!</h2>
+      <p>${channelName ? 'চ্যানেল: ' + channelName : ''}</p>
+      <p style="color:#9090b0">এই পেজ বন্ধ করুন এবং অ্যাপে ফিরে যান।</p>
+      <script>setTimeout(()=>window.close(),2000)</script>
+    </body></html>`);
+  } catch (err) {
+    res.status(500).send('<h2 style="color:red">Auth error: ' + err.message + '</h2>');
+  }
+});
+
+// Google Drive OAuth
+app.get('/auth/drive/callback', async (req, res) => {
+  const { code } = req.query;
+  if (!code) return res.status(400).send('No code');
+  
+  try {
+    const fetch = (await import('node-fetch')).default;
     const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
         code,
-        client_id: process.env.YT_CLIENT_ID,
-        client_secret: process.env.YT_CLIENT_SECRET,
-        redirect_uri: `${process.env.BASE_URL}/auth/youtube/callback`,
+        client_id: process.env.DRIVE_CLIENT_ID || process.env.YT_CLIENT_ID,
+        client_secret: process.env.DRIVE_CLIENT_SECRET || process.env.YT_CLIENT_SECRET,
+        redirect_uri: `${process.env.BASE_URL}/auth/drive/callback`,
         grant_type: 'authorization_code'
       })
     });
     
     const tokens = await tokenRes.json();
-    process.env.YT_ACCESS_TOKEN = tokens.access_token;
+    if (!tokens.access_token) throw new Error(JSON.stringify(tokens));
+    
+    const existing = loadTokens();
+    saveTokens({ ...existing, drive_access_token: tokens.access_token, drive_refresh_token: tokens.refresh_token });
     
     res.send(`<html><body style="background:#0a0a0f;color:#06d6a0;font-family:sans-serif;text-align:center;padding:40px">
-      <h2>✅ YouTube সংযুক্ত হয়েছে!</h2>
-      <p>এই পেজ বন্ধ করুন এবং অ্যাপে ফিরে যান।</p>
-      <script>setTimeout(()=>window.close(),3000)</script>
+      <h2>✅ Google Drive সংযুক্ত হয়েছে!</h2>
+      <p style="color:#9090b0">এই পেজ বন্ধ করুন এবং অ্যাপে ফিরে যান।</p>
+      <script>setTimeout(()=>window.close(),2000)</script>
     </body></html>`);
   } catch (err) {
-    res.status(500).send('Auth error: ' + err.message);
+    res.status(500).send('<h2 style="color:red">Auth error: ' + err.message + '</h2>');
   }
 });
 
