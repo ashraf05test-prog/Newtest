@@ -184,18 +184,31 @@ app.post('/api/ai-generate', async (req, res) => {
       const d = await r.json();
       if (!r.ok) throw new Error(d.error?.message);
       text = d.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
     } else if (service === 'grok') {
+      // xAI Grok
       const r = await fetch('https://api.x.ai/v1/chat/completions', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey || process.env.GROK_API_KEY}` },
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
         body: JSON.stringify({ model: 'grok-3-mini', messages: [{ role: 'user', content: prompt }], temperature: 0.9, max_tokens: 1500 })
       });
       const d = await r.json();
-      if (!r.ok) throw new Error(d.error?.message);
+      if (!r.ok) throw new Error(d.error?.message || JSON.stringify(d));
       text = d.choices?.[0]?.message?.content || '';
+
+    } else if (service === 'groq') {
+      // Groq (free, fast) — console.groq.com
+      const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'user', content: prompt }], temperature: 0.9, max_tokens: 1500 })
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error?.message || JSON.stringify(d));
+      text = d.choices?.[0]?.message?.content || '';
+
     } else if (service === 'openai') {
       const r = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey || process.env.OPENAI_API_KEY}` },
-        body: JSON.stringify({ model: 'gpt-4-turbo-preview', messages: [{ role: 'user', content: prompt }], temperature: 0.9, max_tokens: 1500 })
+        body: JSON.stringify({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: prompt }], temperature: 0.9, max_tokens: 1500 })
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error?.message);
@@ -616,6 +629,12 @@ async function triggerAutoUpload(cfg) {
                   body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
                 });
                 aiText = (await ar.json()).candidates?.[0]?.content?.parts?.[0]?.text || '';
+              } else if (cfg.aiService === 'groq') {
+                const ar = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                  method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.aiKey}` },
+                  body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'user', content: prompt }], max_tokens: 800 })
+                });
+                aiText = (await ar.json()).choices?.[0]?.message?.content || '';
               } else if (cfg.aiService === 'grok') {
                 const ar = await fetch('https://api.x.ai/v1/chat/completions', {
                   method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.aiKey}` },
