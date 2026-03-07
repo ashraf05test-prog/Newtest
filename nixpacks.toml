@@ -1,10 +1,11 @@
-# nixpacks.toml - Install system dependencies on Railway
+# nixpacks.toml - Fixed for Railway
 [phases.setup]
-nixPkgs = ["ffmpeg", "python310", "pip"]
+nixPkgs = ["ffmpeg", "python310"]
 
 [phases.install]
 cmds = [
-  "pip install yt-dlp",
+  "python3 -m ensurepip --upgrade",
+  "python3 -m pip install yt-dlp",
   "npm install"
 ]
 
