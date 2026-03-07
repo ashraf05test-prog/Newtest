@@ -1,14 +1,8 @@
-# railway.toml - Railway Deployment Config
-[build]
-builder = "nixpacks"
+[phases.setup]
+nixPkgs = ["ffmpeg"]
 
-[deploy]
-startCommand = "node server.js"
-healthcheckPath = "/health"
-healthcheckTimeout = 300
-restartPolicyType = "on_failure"
-restartPolicyMaxRetries = 10
+[phases.install]
+cmds = ["pip install yt-dlp --break-system-packages || true", "npm install"]
 
-[environments.production.variables]
-PORT = "3000"
-NODE_ENV = "production"
+[start]
+cmd = "node server.js"
