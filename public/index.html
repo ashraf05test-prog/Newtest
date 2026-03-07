@@ -268,6 +268,7 @@ textarea.input{resize:none;min-height:80px}
     <div class="card-title">🤖 AI সার্ভিস</div>
     <div class="chips" id="aiChips">
       <div class="chip on" onclick="setAI(this,'gemini')">Gemini</div>
+      <div class="chip" onclick="setAI(this,'groq')">🆓 Groq</div>
       <div class="chip" onclick="setAI(this,'grok')">Grok</div>
       <div class="chip" onclick="setAI(this,'openai')">GPT-4</div>
     </div>
@@ -1021,7 +1022,7 @@ function setAI(el, service) {
   const s = gs();
   const map = { gemini: s.geminiKey, grok: s.grokKey, openai: s.openaiKey };
   document.getElementById('aiApiKey').value = map[service] || '';
-  document.getElementById('aiApiKey').placeholder = service === 'gemini' ? 'AIza...' : service === 'grok' ? 'xai-...' : 'sk-...';
+  document.getElementById('aiApiKey').placeholder = service === 'gemini' ? 'AIza...' : service === 'groq' ? 'gsk_...' : service === 'grok' ? 'xai-...' : 'sk-...';
 }
 
 function saveApiKey() {
