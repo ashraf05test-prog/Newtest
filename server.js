@@ -621,7 +621,7 @@ async function triggerAutoUpload(cfg) {
 
           if (cfg.aiService && cfg.aiKey) {
             try {
-              const prompt = `YouTube Shorts এর জন্য বাংলা viral metadata: "${rawTitle}". শুধু JSON: {"title":"ক্লিকবেইট ইমোজি সহ","description":"৩ লাইন","hashtags":["#ট্যাগ",...১৫টি],"tags":["tag",...২০টি]}`;
+              const prompt = `You are an Islamic YouTube Shorts content expert for a Bengali channel. The video background shows: "${rawTitle}". The audio contains Islamic waz/motivation. STRICT RULES: 1) Response must be ONLY valid JSON, no explanation, no markdown. 2) Title must be Bengali, Islamic, motivational, emoji-rich (use ☪️🤲📿🕌), under 60 chars. 3) Title should reflect Islamic wisdom/motivation, NOT just describe the video visuals. 4) Return exactly this JSON: {"title":"ইসলামিক বাংলা টাইটেল ☪️","description":"ইসলামিক ৩ লাইন বাংলা বিবরণ। আল্লাহর পথে চলুন।","hashtags":["#islamicshorts","#islamicvideo","#quran","#waz","#bangladesh","#islamic",...total 15 islamic tags],"tags":["islamic shorts","waz","quran","islamic motivation","bangla waz","islam",...total 20 SEO tags]}`;
               let aiText = '';
               if (cfg.aiService === 'gemini') {
                 const ar = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${cfg.aiKey}`, {
@@ -846,7 +846,7 @@ app.post('/api/drive/auto-upload', async (req, res) => {
       // Helper: generate AI meta
       async function generateMeta(title) {
         if (!aiService || !aiKey) return { title, description: '', hashtags: [], tags: [] };
-        const prompt = `YouTube Shorts এর জন্য বাংলা viral metadata তৈরি করো: "${title}". শুধু JSON দাও কোনো ব্যাখ্যা ছাড়া: {"title":"ক্লিকবেইট টাইটেল ইমোজি সহ ৬০ অক্ষর","description":"৩ লাইন বাংলা বিবরণ","hashtags":["#ট্যাগ১","#ট্যাগ২",...মোট ১৫টি],"tags":["seo","tag",...মোট ২০টি ইংরেজি]}`;
+        const prompt = `You are an Islamic YouTube Shorts content expert for a Bengali channel. The video background shows: "${rawTitle}". The audio contains Islamic waz/motivation. STRICT RULES: 1) Response must be ONLY valid JSON, no explanation, no markdown. 2) Title must be Bengali, Islamic, motivational, emoji-rich (use ☪️🤲📿🕌), under 60 chars. 3) Title should reflect Islamic wisdom/motivation, NOT just describe the video visuals. 4) Return exactly this JSON: {"title":"ইসলামিক বাংলা টাইটেল ☪️","description":"ইসলামিক ৩ লাইন বাংলা বিবরণ। আল্লাহর পথে চলুন।","hashtags":["#islamicshorts","#islamicvideo","#quran","#waz","#bangladesh","#islamic",...total 15 islamic tags],"tags":["islamic shorts","waz","quran","islamic motivation","bangla waz","islam",...total 20 SEO tags]}`;
         let aiText = '';
         if (aiService === 'gemini') {
           const ar = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${aiKey}`, {
@@ -1272,7 +1272,7 @@ app.post('/api/drive/zip-upload', async (req, res) => {
 
           if (aiService && aiKey) {
             try {
-              const prompt = `YouTube Shorts এর জন্য বাংলা viral metadata তৈরি করো: "${rawTitle}". শুধু JSON দাও: {"title":"ক্লিকবেইট টাইটেল ইমোজি সহ","description":"৩ লাইন","hashtags":["#ট্যাগ",...১৫টি],"tags":["tag",...২০টি]}`;
+              const prompt = `You are an Islamic YouTube Shorts content expert for a Bengali channel. The video background shows: "${rawTitle}". The audio contains Islamic waz/motivation. STRICT RULES: 1) Response must be ONLY valid JSON, no explanation, no markdown. 2) Title must be Bengali, Islamic, motivational, emoji-rich (use ☪️🤲📿🕌), under 60 chars. 3) Title should reflect Islamic wisdom/motivation, NOT just describe the video visuals. 4) Return exactly this JSON: {"title":"ইসলামিক বাংলা টাইটেল ☪️","description":"ইসলামিক ৩ লাইন বাংলা বিবরণ। আল্লাহর পথে চলুন।","hashtags":["#islamicshorts","#islamicvideo","#quran","#waz","#bangladesh","#islamic",...total 15 islamic tags],"tags":["islamic shorts","waz","quran","islamic motivation","bangla waz","islam",...total 20 SEO tags]}`;
               let aiText = '';
               if (aiService === 'gemini') {
                 const ar = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${aiKey}`, {
