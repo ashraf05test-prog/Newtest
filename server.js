@@ -43,22 +43,22 @@ app.post('/api/download', async (req, res) => {
     else if (quality === '480p') formatArgs = '-f "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]/best"';
     else formatArgs = '-f "best[ext=mp4]/best"';
     
-    // TikTok watermark removal: download without watermark if possible
-    const tikTokArgs = url.includes('tiktok.com') && removeTikTokWatermark
-      ? '--no-watermark' 
-      : '';
-    
-    const cmd = `yt-dlp ${formatArgs} ${tikTokArgs} \
+    // TikTok watermark-free download
+    const isTikTok = url.includes('tiktok.com') || url.includes('vt.tiktok.com');
+    const tikTokFormat = isTikTok ? '-f "download_addr-2/download_addr/play_addr/bestvideo+bestaudio/best"' : formatArgs;
+    const finalFormat = isTikTok ? tikTokFormat : formatArgs;
+
+    const cmd = `yt-dlp ${finalFormat} \
       --merge-output-format mp4 \
       --write-thumbnail \
       --convert-thumbnails jpg \
-      --add-metadata \
       --no-playlist \
-      --retries 5 \
-      --fragment-retries 5 \
-      --retry-sleep 3 \
-      --user-agent "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15" \
-      --extractor-args "tiktok:webpage_download=1" \
+      --retries 10 \
+      --fragment-retries 10 \
+      --retry-sleep 2 \
+      --user-agent "Mozilla/5.0 (Linux; Android 12; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36" \
+      --add-header "Referer:https://www.tiktok.com/" \
+      --add-header "Accept-Language:en-US,en;q=0.9" \
       -o "${outputTemplate}" \
       "${url}"`;
     
