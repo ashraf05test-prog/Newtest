@@ -141,24 +141,23 @@ app.post('/api/download', async (req, res) => {
     
     const isTikTok = url.includes('tiktok.com') || url.includes('vt.tiktok.com');
 
-    // TikTok: use impersonation + watermark-free format
+    // TikTok watermark-free + impersonation
     const finalFormat = isTikTok
-      ? '-f "download_addr-2/download_addr/play_addr/bestvideo+bestaudio/best"'
+      ? '-f "download_addr-2/download_addr/play_addr/best[ext=mp4]/best"'
       : formatArgs;
 
-    const impersonateFlag = isTikTok ? '--impersonate "chrome-110"' : '';
+    const extraArgs = isTikTok
+      ? '--impersonate "chrome-110" --add-header "Referer:https://www.tiktok.com/"'
+      : '';
 
-    const cmd = `yt-dlp ${finalFormat} ${impersonateFlag} \
+    const cmd = `yt-dlp ${finalFormat} ${extraArgs} \
       --merge-output-format mp4 \
       --write-thumbnail \
       --convert-thumbnails jpg \
       --no-playlist \
-      --ignore-errors \
-      --retries 10 \
-      --fragment-retries 10 \
-      --retry-sleep 2 \
-      --add-header "Referer:https://www.tiktok.com/" \
-      --add-header "Accept-Language:en-US,en;q=0.9" \
+      --retries 5 \
+      --fragment-retries 5 \
+      --retry-sleep 3 \
       -o "${outputTemplate}" \
       "${url}"`;
     
@@ -288,24 +287,37 @@ app.post('/api/merge-audio', async (req, res) => {
   const { videoPath, audioPath, outputPath } = req.body;
   
   try {
-    const outFile = outputPath || videoPath.replace('.mp4', '_final.mp4');
+    if (!videoPath || !fs.existsSync(videoPath)) {
+      throw new Error('Video file not found: ' + videoPath);
+    }
     
-    // Merge: muted video + audio (loop audio if shorter than video)
-    const cmd = `ffmpeg -i "${videoPath}" -stream_loop -1 -i "${audioPath}" \
-      -map 0:v:0 -map 1:a:0 \
-      -c:v copy -c:a aac -b:a 192k \
-      -shortest \
-      "${outFile}" -y`;
+    // Audio can be a URL or local path
+    let localAudioPath = audioPath;
+    if (audioPath && audioPath.startsWith('/temp/')) {
+      localAudioPath = path.join(TEMP_DIR, path.basename(audioPath));
+    }
     
-    await execAsync(cmd, { timeout: 120000 });
+    if (!localAudioPath || !fs.existsSync(localAudioPath)) {
+      throw new Error('Audio file not found: ' + audioPath);
+    }
     
-    // Delete original muted video
-    if (videoPath !== outFile && fs.existsSync(videoPath)) {
+    const outFile = path.join(TEMP_DIR, path.basename(videoPath).replace('.mp4', '_merged.mp4'));
+    
+    // Merge: loop audio to match video length
+    const cmd = `ffmpeg -i "${videoPath}" -stream_loop -1 -i "${localAudioPath}" -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a 192k -shortest "${outFile}" -y`;
+    
+    await execAsync(cmd, { timeout: 180000 });
+    
+    if (!fs.existsSync(outFile)) throw new Error('Merge output not created');
+    
+    // Delete original
+    if (fs.existsSync(videoPath) && videoPath !== outFile) {
       fs.unlinkSync(videoPath);
     }
     
-    res.json({ success: true, outputPath: outFile });
+    res.json({ success: true, outputPath: outFile, filename: path.basename(outFile) });
   } catch (err) {
+    console.error('Merge error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
