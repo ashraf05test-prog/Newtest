@@ -177,7 +177,7 @@ app.post('/api/ai-generate', async (req, res) => {
     let text = '';
 
     if (service === 'gemini') {
-      const r = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=${apiKey || process.env.GEMINI_API_KEY}`, {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey || process.env.GEMINI_API_KEY}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.9, maxOutputTokens: 1500 } })
       });
@@ -583,7 +583,7 @@ app.post('/api/drive/auto-upload', async (req, res) => {
         const prompt = `YouTube Shorts এর জন্য বাংলা viral metadata তৈরি করো: "${title}". শুধু JSON দাও কোনো ব্যাখ্যা ছাড়া: {"title":"ক্লিকবেইট টাইটেল ইমোজি সহ ৬০ অক্ষর","description":"৩ লাইন বাংলা বিবরণ","hashtags":["#ট্যাগ১","#ট্যাগ২",...মোট ১৫টি],"tags":["seo","tag",...মোট ২০টি ইংরেজি]}`;
         let aiText = '';
         if (aiService === 'gemini') {
-          const ar = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=${aiKey}`, {
+          const ar = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${aiKey}`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
           });
