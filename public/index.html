@@ -144,6 +144,17 @@ textarea.input{resize:none;min-height:80px}
 .toggle.on::after{left:23px}
 /* SECTION TITLE */
 .sec-title{font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
+/* DAY BUTTONS */
+.dbtn{background:var(--surface3);color:var(--text2);border-radius:6px;font-size:10px;padding:6px 2px;text-align:center;cursor:pointer;font-weight:600;border:1px solid var(--border);transition:all .2s}
+.dbtn.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+/* TIME SLOT */
+.slot-item{display:flex;align-items:center;gap:8px;background:var(--surface3);border-radius:10px;padding:10px 12px;margin-bottom:8px}
+.slot-time{font-size:16px;font-weight:700;color:var(--yellow);min-width:55px;font-family:monospace}
+.slot-label{flex:1;font-size:13px;color:var(--text)}
+.slot-toggle{width:38px;height:21px;background:var(--surface2);border-radius:10px;position:relative;cursor:pointer;transition:background .2s;border:none;flex-shrink:0}
+.slot-toggle.on{background:var(--accent3)}
+.slot-toggle::after{content:'';position:absolute;top:2px;left:2px;width:17px;height:17px;background:#fff;border-radius:50%;transition:left .2s}
+.slot-toggle.on::after{left:19px}
 /* UPLOAD FORM */
 .upload-form-field{margin-bottom:10px}
 .upload-form-label{font-size:12px;color:var(--text2);margin-bottom:4px;display:block}
@@ -305,19 +316,84 @@ textarea.input{resize:none;min-height:80px}
 
 <!-- 6. SCHEDULE -->
 <div class="panel" id="panel-sched">
+
+  <!-- Master Toggle -->
   <div class="card">
-    <div class="card-title">⏰ অটো শিডিউল</div>
-    <div class="setting-row">
-      <div><div class="setting-label">অটো আপলোড</div><div class="setting-sub">প্রতিদিন নির্দিষ্ট সময়ে</div></div>
-      <button class="toggle" id="schedToggle" onclick="toggleSchedule()"></button>
+    <div style="display:flex;align-items:center;justify-content:space-between">
+      <div>
+        <div style="font-size:15px;font-weight:700">⏰ অটো শিডিউলার</div>
+        <div style="font-size:12px;color:var(--text2);margin-top:2px" id="schedStatusText">বন্ধ আছে</div>
+      </div>
+      <button class="toggle" id="schedMasterToggle" onclick="toggleMasterSched(this)"></button>
     </div>
-    <div style="margin-top:12px">
-      <label class="upload-form-label">সময়</label>
-      <input class="input" type="time" id="schedTime" value="09:00">
-    </div>
-    <button class="btn btn-purple btn-full" style="margin-top:10px" onclick="saveSchedule()">💾 সেভ</button>
   </div>
-  <div id="schedList"></div>
+
+  <!-- Drive Settings -->
+  <div class="card">
+    <div class="card-title">📁 Google Drive সোর্স</div>
+    <div style="margin-bottom:8px">
+      <label class="upload-form-label">Drive Folder ID</label>
+      <input class="input" id="schedFolderId" placeholder="Google Drive Folder ID (ফোল্ডার লিংক থেকে নিন)">
+      <div style="font-size:11px;color:var(--text2);margin-top:4px">ফোল্ডার লিংক: drive.google.com/drive/folders/<b>এই অংশটুকু</b></div>
+    </div>
+    <div style="margin-bottom:8px">
+      <label class="upload-form-label">প্রতিবার সর্বোচ্চ কতটি ভিডিও</label>
+      <input class="input" type="number" id="schedMaxVids" value="3" min="1" max="20">
+    </div>
+    <div style="margin-bottom:8px">
+      <label class="upload-form-label">YouTube Privacy</label>
+      <select class="input" id="schedPrivacy">
+        <option value="private">🔒 Private</option>
+        <option value="public">🌍 Public</option>
+        <option value="unlisted">🔗 Unlisted</option>
+      </select>
+    </div>
+    <div class="setting-row" style="padding:8px 0">
+      <div><div class="setting-label" style="font-size:13px">আপলোডের পর Drive থেকে ডিলিট</div></div>
+      <button class="toggle on" id="schedDeleteToggle" onclick="this.classList.toggle('on')"></button>
+    </div>
+    <div class="setting-row" style="padding:8px 0">
+      <div><div class="setting-label" style="font-size:13px">AI মেটা অটো জেনারেট</div></div>
+      <button class="toggle on" id="schedAIToggle" onclick="this.classList.toggle('on')"></button>
+    </div>
+  </div>
+
+  <!-- Days -->
+  <div class="card">
+    <div class="card-title">📅 সাপ্তাহিক দিন</div>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:5px" id="schedDays">
+      <div class="dbtn on" data-d="0">রবি</div>
+      <div class="dbtn on" data-d="1">সোম</div>
+      <div class="dbtn on" data-d="2">মঙ্গল</div>
+      <div class="dbtn on" data-d="3">বুধ</div>
+      <div class="dbtn on" data-d="4">বৃহ</div>
+      <div class="dbtn on" data-d="5">শুক্র</div>
+      <div class="dbtn on" data-d="6">শনি</div>
+    </div>
+  </div>
+
+  <!-- Time Slots -->
+  <div class="card">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div class="card-title" style="margin:0">🕐 সময় স্লট</div>
+      <button class="btn btn-sm btn-purple" onclick="addTimeSlot()">+ যোগ করুন</button>
+    </div>
+    <div id="timeSlotList"></div>
+    <div id="noSlots" style="text-align:center;padding:16px;color:var(--text2);font-size:13px">কোনো সময় নেই। যোগ করুন।</div>
+  </div>
+
+  <!-- Manual Run -->
+  <div class="card">
+    <div class="card-title">▶ এখনই চালাও</div>
+    <div style="font-size:12px;color:var(--text2);margin-bottom:10px">শিডিউল ছাড়াই এখনই Drive থেকে আপলোড শুরু করো</div>
+    <button class="btn btn-red btn-full" onclick="runNow()">🚀 এখনই আপলোড করো</button>
+  </div>
+
+  <!-- Log -->
+  <div class="card">
+    <div class="card-title">📊 আপলোড লগ</div>
+    <div class="log-box" id="schedLog" style="height:150px"></div>
+  </div>
 </div>
 
 <!-- 7. SETTINGS -->
@@ -460,11 +536,13 @@ function getBackend() { return (gs().backendUrl || '').replace(/\/$/, ''); }
 
 // ========== INIT ==========
 window.addEventListener('DOMContentLoaded', () => {
+  loadVideos();
+  loadAudios();
   loadSettings();
   renderVideos();
   renderAudios();
   checkConnection();
-  loadSchedule();
+  initSched();
 });
 
 function loadSettings() {
@@ -1055,22 +1133,190 @@ function upLog(msg, err) {
 }
 
 // ========== SCHEDULE ==========
-function saveSchedule() {
-  const time = document.getElementById('schedTime').value;
-  const on = document.getElementById('schedToggle').classList.contains('on');
-  ss({ schedTime: time, schedEnabled: on });
-  toast('💾 শিডিউল সেভ হয়েছে');
-  loadSchedule();
-}
+const SCHED = {
+  slots: [],
+  days: [0,1,2,3,4,5,6],
+  running: false,
+  timer: null
+};
 
-function toggleSchedule() {
-  document.getElementById('schedToggle').classList.toggle('on');
-}
-
-function loadSchedule() {
+function initSched() {
   const s = gs();
-  if (s.schedTime) document.getElementById('schedTime').value = s.schedTime;
-  if (s.schedEnabled) document.getElementById('schedToggle').classList.add('on');
+  if (s.schedSlots) SCHED.slots = s.schedSlots;
+  if (s.schedDays) SCHED.days = s.schedDays;
+  if (s.schedFolderId) document.getElementById('schedFolderId').value = s.schedFolderId;
+  if (s.schedMaxVids) document.getElementById('schedMaxVids').value = s.schedMaxVids;
+  if (s.schedPrivacy) document.getElementById('schedPrivacy').value = s.schedPrivacy;
+  if (s.schedDeleteAfter === false) document.getElementById('schedDeleteToggle').classList.remove('on');
+  if (s.schedAI === false) document.getElementById('schedAIToggle').classList.remove('on');
+  if (s.schedEnabled) { document.getElementById('schedMasterToggle').classList.add('on'); startSchedTimer(); }
+  renderDays(); renderSlots();
+}
+
+function saveSched() {
+  ss({
+    schedSlots: SCHED.slots,
+    schedDays: SCHED.days,
+    schedFolderId: document.getElementById('schedFolderId').value,
+    schedMaxVids: document.getElementById('schedMaxVids').value,
+    schedPrivacy: document.getElementById('schedPrivacy').value,
+    schedDeleteAfter: document.getElementById('schedDeleteToggle').classList.contains('on'),
+    schedAI: document.getElementById('schedAIToggle').classList.contains('on'),
+    schedEnabled: document.getElementById('schedMasterToggle').classList.contains('on')
+  });
+}
+
+function toggleMasterSched(el) {
+  el.classList.toggle('on');
+  const on = el.classList.contains('on');
+  document.getElementById('schedStatusText').textContent = on ? '✅ চালু আছে' : 'বন্ধ আছে';
+  if (on) { saveSched(); startSchedTimer(); toast('✅ শিডিউলার চালু', 2000); }
+  else { stopSchedTimer(); saveSched(); toast('⏸ শিডিউলার বন্ধ', 2000); }
+}
+
+function renderDays() {
+  document.querySelectorAll('#schedDays .dbtn').forEach(btn => {
+    const d = parseInt(btn.dataset.d);
+    btn.classList.toggle('on', SCHED.days.includes(d));
+    btn.onclick = () => {
+      if (SCHED.days.includes(d)) SCHED.days = SCHED.days.filter(x => x !== d);
+      else SCHED.days.push(d);
+      btn.classList.toggle('on', SCHED.days.includes(d));
+      saveSched();
+    };
+  });
+}
+
+function renderSlots() {
+  const list = document.getElementById('timeSlotList');
+  const none = document.getElementById('noSlots');
+  none.style.display = SCHED.slots.length ? 'none' : 'block';
+  list.innerHTML = SCHED.slots.map((s, i) => `
+    <div class="slot-item">
+      <div class="slot-time">${s.time}</div>
+      <div class="slot-label">${s.label}</div>
+      <button class="slot-toggle ${s.on ? 'on' : ''}" onclick="toggleSlot(${i},this)"></button>
+      <button class="btn btn-xs btn-ghost" onclick="removeSlot(${i})" style="padding:4px 8px">✕</button>
+    </div>`).join('');
+}
+
+function toggleSlot(i, el) {
+  SCHED.slots[i].on = !SCHED.slots[i].on;
+  el.classList.toggle('on', SCHED.slots[i].on);
+  saveSched();
+}
+
+function removeSlot(i) {
+  SCHED.slots.splice(i, 1);
+  renderSlots(); saveSched();
+}
+
+function addTimeSlot() {
+  const time = prompt('সময় দিন (HH:MM)', '12:00');
+  if (!time || !time.match(/^\d{2}:\d{2}$/)) { toast('সঠিক সময় দিন (HH:MM)'); return; }
+  const label = prompt('লেবেল দিন', time + ' পোস্ট') || time + ' পোস্ট';
+  SCHED.slots.push({ time, label, on: true });
+  SCHED.slots.sort((a, b) => a.time.localeCompare(b.time));
+  renderSlots(); saveSched();
+  toast('✅ ' + time + ' যোগ হয়েছে');
+}
+
+function startSchedTimer() {
+  stopSchedTimer();
+  SCHED.timer = setInterval(() => checkSchedTick(), 30000);
+  checkSchedTick();
+  schedLog('✅ শিডিউলার চালু হয়েছে');
+}
+
+function stopSchedTimer() {
+  if (SCHED.timer) { clearInterval(SCHED.timer); SCHED.timer = null; }
+}
+
+function checkSchedTick() {
+  if (!document.getElementById('schedMasterToggle').classList.contains('on')) return;
+  const now = new Date();
+  const day = now.getDay();
+  if (!SCHED.days.includes(day)) return;
+  const cur = String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0');
+  const slot = SCHED.slots.find(s => s.on && s.time === cur && s._lastRun !== now.toDateString());
+  if (slot) {
+    slot._lastRun = now.toDateString();
+    schedLog('⏰ ' + slot.time + ' — অটো আপলোড শুরু');
+    runAutoUpload();
+  }
+}
+
+async function runNow() {
+  saveSched();
+  const folderId = document.getElementById('schedFolderId').value.trim();
+  if (!folderId) { toast('Drive Folder ID দিন!'); return; }
+  schedLog('🚀 ম্যানুয়াল আপলোড শুরু...');
+  await runAutoUpload();
+}
+
+async function runAutoUpload() {
+  if (SCHED.running) { toast('আগের আপলোড চলছে...'); return; }
+  SCHED.running = true;
+
+  const folderId = document.getElementById('schedFolderId').value.trim();
+  const maxVids = parseInt(document.getElementById('schedMaxVids').value) || 3;
+  const privacy = document.getElementById('schedPrivacy').value;
+  const deleteAfter = document.getElementById('schedDeleteToggle').classList.contains('on');
+  const useAI = document.getElementById('schedAIToggle').classList.contains('on');
+  const backend = getBackend();
+
+  const s = gs();
+  const aiService = s.geminiKey ? 'gemini' : s.grokKey ? 'grok' : s.openaiKey ? 'openai' : null;
+  const aiKey = s.geminiKey || s.grokKey || s.openaiKey || null;
+
+  if (!folderId) { schedLog('✗ Drive Folder ID নেই!', true); SCHED.running = false; return; }
+
+  try {
+    const r = await fetch(backend + '/api/drive/auto-upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folderId, maxVideos: maxVids, privacy, deleteAfterUpload: deleteAfter, aiService: useAI ? aiService : null, aiKey: useAI ? aiKey : null })
+    });
+    if (!r.ok) throw new Error(await r.text());
+    const { jobId } = await r.json();
+
+    schedLog('⏳ আপলোড হচ্ছে...');
+
+    // Poll
+    const maxWait = 30 * 60 * 1000; // 30 min
+    const start = Date.now();
+    while (Date.now() - start < maxWait) {
+      await new Promise(res => setTimeout(res, 5000));
+      const jr = await fetch(backend + '/api/job/' + jobId);
+      const job = await jr.json();
+
+      if (job.status === 'done') {
+        const res = job.result;
+        schedLog(`✅ সম্পন্ন! মোট: ${res.total}, সফল: ${res.results.filter(r=>r.status==='ok').length}`);
+        res.results.forEach(r => {
+          if (r.status === 'ok') schedLog(`  ✓ ${r.file} → youtu.be/${r.videoId}`);
+          else schedLog(`  ✗ ${r.file}: ${r.error}`, true);
+        });
+        break;
+      }
+      if (job.status === 'error') { schedLog('✗ ত্রুটি: ' + job.error, true); break; }
+    }
+  } catch (err) {
+    schedLog('✗ ত্রুটি: ' + err.message, true);
+  }
+
+  SCHED.running = false;
+}
+
+function schedLog(msg, err) {
+  const box = document.getElementById('schedLog');
+  if (!box) return;
+  const d = document.createElement('div');
+  const t = new Date().toLocaleTimeString('bn');
+  d.textContent = '[' + t + '] ' + msg;
+  if (err) d.style.color = 'var(--red)';
+  box.appendChild(d);
+  box.scrollTop = box.scrollHeight;
 }
 
 // ========== SETTINGS ==========
@@ -1148,8 +1394,7 @@ function toast(msg, duration = 2500) {
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-// Load persisted data
-loadVideos(); loadAudios();
+// Load persisted data (handled in DOMContentLoaded)
 </script>
 </body>
 </html>
