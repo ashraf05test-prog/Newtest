@@ -338,16 +338,39 @@ textarea.input{resize:none;min-height:80px}
   <!-- Drive Settings -->
   <div class="card">
     <div class="card-title">📁 Google Drive সোর্স</div>
-    <div style="margin-bottom:8px">
-      <label class="upload-form-label">📹 ভিডিও Folder ID</label>
-      <input class="input" id="schedFolderId" placeholder="ভিডিও ফোল্ডারের ID">
-      <div style="font-size:11px;color:var(--text2);margin-top:4px">drive.google.com/drive/folders/<b>এই অংশটুকু</b></div>
+
+    <!-- Source Type -->
+    <div style="margin-bottom:12px">
+      <label class="upload-form-label">সোর্স টাইপ</label>
+      <div class="chips" id="schedSourceChips">
+        <div class="chip on" onclick="setSchedSource(this,'folder')">📁 Video Folder</div>
+        <div class="chip" onclick="setSchedSource(this,'zip')">🗜 ZIP ফাইল</div>
+      </div>
     </div>
+
+    <!-- Folder mode -->
+    <div id="schedFolderMode">
+      <div style="margin-bottom:8px">
+        <label class="upload-form-label">📹 ভিডিও Folder ID</label>
+        <input class="input" id="schedFolderId" placeholder="ভিডিও ফোল্ডারের ID">
+        <div style="font-size:11px;color:var(--text2);margin-top:4px">drive.google.com/drive/folders/<b>এই অংশটুকু</b></div>
+      </div>
+    </div>
+
+    <!-- ZIP mode -->
+    <div id="schedZipMode" style="display:none">
+      <div style="margin-bottom:8px">
+        <label class="upload-form-label">🗜 ZIP File ID (Drive-এ)</label>
+        <input class="input" id="schedZipFileId" placeholder="ZIP ফাইলের ID">
+        <div style="font-size:11px;color:var(--text2);margin-top:4px">ZIP-এ সব video রাখো → Drive-এ upload করো → এর ID দাও</div>
+      </div>
+    </div>
+
     <div style="margin-bottom:8px">
       <label class="upload-form-label">🎵 অডিও Folder ID (র‍্যান্ডম নেবে)</label>
       <input class="input" id="schedAudioFolderId" placeholder="অডিও ফোল্ডারের ID (ঐচ্ছিক)">
     </div>
-    <div style="margin-bottom:8px">
+    <div style="margin-bottom:8px" id="schedMaxVidsRow">
       <label class="upload-form-label">প্রতিবার সর্বোচ্চ কতটি ভিডিও</label>
       <input class="input" type="number" id="schedMaxVids" value="3" min="1" max="20">
     </div>
@@ -1191,17 +1214,36 @@ function initSched() {
   renderDays(); renderSlots();
 }
 
-function saveSched() {
-  ss({
-    schedSlots: SCHED.slots,
-    schedDays: SCHED.days,
-    schedFolderId: document.getElementById('schedFolderId').value,
-    schedMaxVids: document.getElementById('schedMaxVids').value,
-    schedPrivacy: document.getElementById('schedPrivacy').value,
-    schedDeleteAfter: document.getElementById('schedDeleteToggle').classList.contains('on'),
-    schedAI: document.getElementById('schedAIToggle').classList.contains('on'),
-    schedEnabled: document.getElementById('schedMasterToggle').classList.contains('on')
-  });
+let schedSource = 'folder';
+
+function setSchedSource(el, src) {
+  schedSource = src;
+  document.querySelectorAll('#schedSourceChips .chip').forEach(c => c.classList.remove('on'));
+  el.classList.add('on');
+  document.getElementById('schedFolderMode').style.display = src === 'folder' ? 'block' : 'none';
+  document.getElementById('schedZipMode').style.display = src === 'zip' ? 'block' : 'none';
+  document.getElementById('schedMaxVidsRow').style.display = src === 'zip' ? 'none' : 'block';
+}
+
+
+  const cfg = {
+    enabled: document.getElementById('schedMasterToggle').classList.contains('on'),
+    slots: SCHED.slots,
+    days: SCHED.days,
+    folderId: document.getElementById('schedFolderId').value.trim(),
+    audioFolderId: document.getElementById('schedAudioFolderId').value.trim() || null,
+    maxVideos: parseInt(document.getElementById('schedMaxVids').value) || 3,
+    privacy: document.getElementById('schedPrivacy').value,
+    deleteAfterUpload: document.getElementById('schedDeleteToggle').classList.contains('on'),
+    aiService: document.getElementById('schedAIToggle').classList.contains('on') ? (gs().geminiKey ? 'gemini' : gs().grokKey ? 'grok' : gs().openaiKey ? 'openai' : null) : null,
+    aiKey: document.getElementById('schedAIToggle').classList.contains('on') ? (gs().geminiKey || gs().grokKey || gs().openaiKey || null) : null
+  };
+  ss({ schedSlots: SCHED.slots, schedDays: SCHED.days, schedFolderId: cfg.folderId, schedMaxVids: cfg.maxVideos, schedPrivacy: cfg.privacy, schedDeleteAfter: cfg.deleteAfterUpload, schedAI: cfg.aiService !== null, schedEnabled: cfg.enabled });
+  // Sync to server — browser বন্ধ থাকলেও কাজ করবে
+  fetch(getBackend() + '/api/schedule/save', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(cfg)
+  }).catch(e => console.warn('[SCHED] Sync failed:', e.message));
 }
 
 function toggleMasterSched(el) {
@@ -1289,7 +1331,43 @@ async function runNow() {
   const folderId = document.getElementById('schedFolderId').value.trim();
   if (!folderId) { toast('Drive Folder ID দিন!'); return; }
   schedLog('🚀 ম্যানুয়াল আপলোড শুরু...');
-  await runAutoUpload();
+
+  const cfg = {
+    folderId,
+    audioFolderId: document.getElementById('schedAudioFolderId').value.trim() || null,
+    maxVideos: parseInt(document.getElementById('schedMaxVids').value) || 3,
+    privacy: document.getElementById('schedPrivacy').value,
+    deleteAfterUpload: document.getElementById('schedDeleteToggle').classList.contains('on'),
+    aiService: document.getElementById('schedAIToggle').classList.contains('on') ? (gs().geminiKey ? 'gemini' : gs().grokKey ? 'grok' : gs().openaiKey ? 'openai' : null) : null,
+    aiKey: document.getElementById('schedAIToggle').classList.contains('on') ? (gs().geminiKey || gs().grokKey || gs().openaiKey || null) : null
+  };
+
+  try {
+    const r = await fetch(getBackend() + '/api/schedule/run-now', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(cfg)
+    });
+    const { jobId } = await r.json();
+    schedLog('⏳ আপলোড হচ্ছে... (Job: ' + jobId + ')');
+
+    const maxWait = 30 * 60 * 1000;
+    const start = Date.now();
+    while (Date.now() - start < maxWait) {
+      await new Promise(res => setTimeout(res, 5000));
+      const jr = await fetch(getBackend() + '/api/job/' + jobId);
+      const job = await jr.json();
+      if (job.status === 'done') {
+        const res = job.result;
+        schedLog(`✅ সম্পন্ন! সফল: ${res.results.filter(r=>r.status==='ok').length}/${res.total}`);
+        res.results.forEach(r => {
+          if (r.status === 'ok') schedLog(`  ✓ ${r.file} → youtu.be/${r.videoId}`);
+          else schedLog(`  ✗ ${r.file}: ${r.error}`, true);
+        });
+        break;
+      }
+      if (job.status === 'error') { schedLog('✗ ' + job.error, true); break; }
+    }
+  } catch(e) { schedLog('✗ ' + e.message, true); }
 }
 
 async function runAutoUpload() {
@@ -1308,21 +1386,27 @@ async function runAutoUpload() {
   const aiService = s.geminiKey ? 'gemini' : s.grokKey ? 'grok' : s.openaiKey ? 'openai' : null;
   const aiKey = s.geminiKey || s.grokKey || s.openaiKey || null;
 
-  if (!folderId) { schedLog('✗ ভিডিও Folder ID নেই!', true); SCHED.running = false; return; }
+  if (!folderId && schedSource === 'folder') { schedLog('✗ ভিডিও Folder ID নেই!', true); SCHED.running = false; return; }
+
+  const zipFileId = document.getElementById('schedZipFileId')?.value.trim();
+  if (!zipFileId && schedSource === 'zip') { schedLog('✗ ZIP File ID নেই!', true); SCHED.running = false; return; }
 
   try {
-    const r = await fetch(backend + '/api/drive/auto-upload', {
+    let endpoint, body;
+
+    if (schedSource === 'zip') {
+      endpoint = backend + '/api/drive/zip-upload';
+      body = { fileId: zipFileId, audioFolderId: audioFolderId || null, privacy, deleteAfterUpload: deleteAfter, aiService: useAI ? aiService : null, aiKey: useAI ? aiKey : null };
+      schedLog('🗜 ZIP থেকে আপলোড শুরু...');
+    } else {
+      endpoint = backend + '/api/drive/auto-upload';
+      body = { folderId, audioFolderId: audioFolderId || null, maxVideos: maxVids, privacy, deleteAfterUpload: deleteAfter, aiService: useAI ? aiService : null, aiKey: useAI ? aiKey : null };
+      schedLog('📁 Drive Folder থেকে আপলোড শুরু...');
+    }
+    const r = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        folderId,
-        audioFolderId: audioFolderId || null,
-        maxVideos: maxVids,
-        privacy,
-        deleteAfterUpload: deleteAfter,
-        aiService: useAI ? aiService : null,
-        aiKey: useAI ? aiKey : null
-      })
+      body: JSON.stringify(body)
     });
     if (!r.ok) throw new Error(await r.text());
     const { jobId } = await r.json();
