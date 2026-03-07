@@ -1,6 +1,5 @@
-
-[phases.setup]
-nixPkgs = ["ffmpeg", "python310", "python310Packages.pip", "python310Packages.yt-dlp"]
+phases.setup]
+nixPkgs = ["nodejs_20", "ffmpeg", "python310", "python310Packages.yt-dlp"]
 
 [phases.install]
 cmds = ["npm install"]
