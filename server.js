@@ -177,7 +177,7 @@ app.post('/api/ai-generate', async (req, res) => {
     let text = '';
 
     if (service === 'gemini') {
-      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey || process.env.GEMINI_API_KEY}`, {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey || process.env.GEMINI_API_KEY}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.9, maxOutputTokens: 1500 } })
       });
@@ -323,8 +323,90 @@ app.get('/api/status', (req, res) => {
 
 // ========== TOKEN STORAGE ==========
 const TOKEN_FILE = path.join(__dirname, 'tokens.json');
-function saveTokens(t) { fs.writeFileSync(TOKEN_FILE, JSON.stringify(t, null, 2)); }
-function loadTokens() { try { if (fs.existsSync(TOKEN_FILE)) return JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf8')); } catch {} return {}; }
+
+function saveTokens(t) {
+  // Local save
+  fs.writeFileSync(TOKEN_FILE, JSON.stringify(t, null, 2));
+  // Drive backup (async, don't wait)
+  backupTokensToDrive(t).catch(e => console.warn('[TOKEN] Drive backup failed:', e.message));
+}
+
+function loadTokens() {
+  try {
+    if (fs.existsSync(TOKEN_FILE)) {
+      const t = JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf8'));
+      if (t && Object.keys(t).length > 0) return t;
+    }
+  } catch {}
+  return {};
+}
+
+// Drive token backup file name
+const TOKEN_DRIVE_NAME = 'yta_tokens_backup.json';
+let tokenDriveFileId = process.env.TOKEN_DRIVE_FILE_ID || null;
+
+async function backupTokensToDrive(tokens) {
+  try {
+    const fetch = (await import('node-fetch')).default;
+    const driveToken = tokens.drive_access_token;
+    if (!driveToken) return;
+
+    const content = JSON.stringify(tokens, null, 2);
+    const boundary = 'tokenboundary';
+
+    if (tokenDriveFileId) {
+      // Update existing file
+      await fetch(`https://www.googleapis.com/upload/drive/v3/files/${tokenDriveFileId}?uploadType=media`, {
+        method: 'PATCH',
+        headers: { 'Authorization': `Bearer ${driveToken}`, 'Content-Type': 'application/json' },
+        body: content
+      });
+    } else {
+      // Create new file
+      const meta = JSON.stringify({ name: TOKEN_DRIVE_NAME, mimeType: 'application/json' });
+      const body = `--${boundary}\r\nContent-Type: application/json\r\n\r\n${meta}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${content}\r\n--${boundary}--`;
+      const r = await fetch(`https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${driveToken}`, 'Content-Type': `multipart/related; boundary=${boundary}` },
+        body
+      });
+      const d = await r.json();
+      if (d.id) { tokenDriveFileId = d.id; console.log('[TOKEN] Drive backup created:', d.id); }
+    }
+  } catch (e) { console.warn('[TOKEN] Backup error:', e.message); }
+}
+
+async function restoreTokensFromDrive() {
+  try {
+    const fetch = (await import('node-fetch')).default;
+    // Need a service token - use env vars if available
+    const driveToken = process.env.DRIVE_ACCESS_TOKEN;
+    if (!driveToken) return;
+
+    // Search for backup file
+    const r = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q=name='${TOKEN_DRIVE_NAME}' and trashed=false&fields=files(id,name)`,
+      { headers: { 'Authorization': `Bearer ${driveToken}` } }
+    );
+    const data = await r.json();
+    if (!data.files?.length) return;
+
+    const fileId = data.files[0].id;
+    tokenDriveFileId = fileId;
+
+    const fr = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+      headers: { 'Authorization': `Bearer ${driveToken}` }
+    });
+    const tokens = await fr.json();
+    if (tokens && tokens.access_token) {
+      fs.writeFileSync(TOKEN_FILE, JSON.stringify(tokens, null, 2));
+      console.log('[TOKEN] Restored from Drive ✅');
+    }
+  } catch (e) { console.warn('[TOKEN] Restore failed:', e.message); }
+}
+
+// On startup, try to restore tokens from Drive
+restoreTokensFromDrive();
 
 // ========== YOUTUBE OAUTH ==========
 app.get('/auth/youtube/callback', async (req, res) => {
@@ -372,4 +454,214 @@ app.listen(PORT, () => {
   console.log(`🚀 YouTube Automation Server running on port ${PORT}`);
   try { require('child_process').execSync('yt-dlp --version'); console.log('✓ yt-dlp available'); } catch { console.warn('✗ yt-dlp not found'); }
   try { require('child_process').execSync('ffmpeg -version 2>&1 | head -1'); console.log('✓ ffmpeg available'); } catch { console.warn('✗ ffmpeg not found'); }
+});
+
+// ========== DRIVE AUTO UPLOAD SYSTEM ==========
+
+// List files in Drive folder
+app.get('/api/drive/list', async (req, res) => {
+  const { folderId } = req.query;
+  try {
+    const fetch = (await import('node-fetch')).default;
+    const t = loadTokens();
+    const token = t.drive_access_token || process.env.DRIVE_ACCESS_TOKEN;
+    if (!token) throw new Error('Drive সংযুক্ত নয়');
+
+    const query = folderId
+      ? `'${folderId}' in parents and trashed=false`
+      : `trashed=false`;
+
+    const r = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name,mimeType,size)&pageSize=100`,
+      { headers: { 'Authorization': `Bearer ${token}` } }
+    );
+    const data = await r.json();
+    if (!r.ok) throw new Error(JSON.stringify(data));
+    res.json({ files: data.files || [] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Download file from Drive to temp
+app.post('/api/drive/download', async (req, res) => {
+  const { fileId, fileName } = req.body;
+  try {
+    const fetch = (await import('node-fetch')).default;
+    const t = loadTokens();
+    const token = t.drive_access_token || process.env.DRIVE_ACCESS_TOKEN;
+    if (!token) throw new Error('Drive সংযুক্ত নয়');
+
+    const r = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+      { headers: { 'Authorization': `Bearer ${token}` } }
+    );
+    if (!r.ok) throw new Error('Drive download failed');
+
+    const localPath = path.join(TEMP_DIR, fileName || fileId + '.mp4');
+    const buffer = await r.buffer();
+    fs.writeFileSync(localPath, buffer);
+
+    res.json({ success: true, filepath: localPath, filename: path.basename(localPath) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete file from Drive
+app.post('/api/drive/delete', async (req, res) => {
+  const { fileId } = req.body;
+  try {
+    const fetch = (await import('node-fetch')).default;
+    const t = loadTokens();
+    const token = t.drive_access_token || process.env.DRIVE_ACCESS_TOKEN;
+    if (!token) throw new Error('Drive সংযুক্ত নয়');
+
+    const r = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${fileId}`,
+      { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } }
+    );
+    if (!r.ok && r.status !== 204) throw new Error('Delete failed');
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Full auto: Drive folder → AI meta → YouTube upload → delete from Drive
+app.post('/api/drive/auto-upload', async (req, res) => {
+  const { folderId, aiService, aiKey, privacy, deleteAfterUpload, maxVideos } = req.body;
+
+  const jobId = createJob();
+  res.json({ jobId, status: 'processing' });
+
+  (async () => {
+    try {
+      const fetch = (await import('node-fetch')).default;
+      const t = loadTokens();
+      const driveToken = t.drive_access_token || process.env.DRIVE_ACCESS_TOKEN;
+      const ytToken = t.access_token || process.env.YT_ACCESS_TOKEN;
+
+      if (!driveToken) throw new Error('Drive সংযুক্ত নয়');
+      if (!ytToken) throw new Error('YouTube সংযুক্ত নয়');
+
+      // 1. List Drive files
+      const query = folderId ? `'${folderId}' in parents and trashed=false` : `trashed=false`;
+      const listRes = await fetch(
+        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name,mimeType,size)&pageSize=100`,
+        { headers: { 'Authorization': `Bearer ${driveToken}` } }
+      );
+      const listData = await listRes.json();
+      const allFiles = (listData.files || []).filter(f =>
+        f.mimeType?.includes('video') || f.name?.match(/\.(mp4|mov|avi|mkv)$/i)
+      );
+
+      if (!allFiles.length) throw new Error('Drive-এ কোনো ভিডিও নেই');
+
+      const files = maxVideos ? allFiles.slice(0, maxVideos) : allFiles;
+      const results = [];
+
+      for (const file of files) {
+        console.log('[AUTO] Processing:', file.name);
+
+        try {
+          // 2. Download from Drive
+          const dlRes = await fetch(
+            `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`,
+            { headers: { 'Authorization': `Bearer ${driveToken}` } }
+          );
+          if (!dlRes.ok) throw new Error('Drive download failed for ' + file.name);
+
+          const localPath = path.join(TEMP_DIR, file.id + '_' + file.name);
+          const buffer = await dlRes.buffer();
+          fs.writeFileSync(localPath, buffer);
+
+          // 3. Generate AI meta
+          let meta = { title: file.name.replace(/\.[^.]+$/, ''), description: '', hashtags: [], tags: [] };
+          if (aiService && aiKey) {
+            try {
+              const prompt = `YouTube Shorts এর জন্য বাংলা metadata তৈরি করো এই ভিডিওর জন্য: "${file.name}". শুধু JSON দাও: {"title":"ক্লিকবেইট টাইটেল ইমোজি সহ","description":"৩ লাইন বিবরণ","hashtags":["#হ্যাশট্যাগ"x15],"tags":["seo tag"x20]}`;
+
+              let aiText = '';
+              if (aiService === 'gemini') {
+                const ar = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${aiKey}`, {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+                });
+                const ad = await ar.json();
+                aiText = ad.candidates?.[0]?.content?.parts?.[0]?.text || '';
+              } else if (aiService === 'grok') {
+                const ar = await fetch('https://api.x.ai/v1/chat/completions', {
+                  method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${aiKey}` },
+                  body: JSON.stringify({ model: 'grok-beta', messages: [{ role: 'user', content: prompt }], max_tokens: 1000 })
+                });
+                const ad = await ar.json();
+                aiText = ad.choices?.[0]?.message?.content || '';
+              }
+
+              if (aiText) {
+                const clean = aiText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+                const parsed = JSON.parse(clean);
+                meta = { ...meta, ...parsed };
+              }
+            } catch (e) { console.warn('[AUTO] AI failed:', e.message); }
+          }
+
+          // 4. Upload to YouTube
+          const fullDesc = `${meta.description || ''}\n\n${(meta.hashtags || []).join(' ')}`.trim();
+          const ytMeta = {
+            snippet: {
+              title: (meta.title || file.name).substring(0, 100),
+              description: fullDesc.substring(0, 5000),
+              tags: (meta.tags || []).slice(0, 30),
+              categoryId: '22'
+            },
+            status: { privacyStatus: privacy || 'private', selfDeclaredMadeForKids: false }
+          };
+
+          const fileSize = fs.statSync(localPath).size;
+          const initRes = await fetch('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${ytToken}`, 'Content-Type': 'application/json', 'X-Upload-Content-Type': 'video/mp4', 'X-Upload-Content-Length': fileSize },
+            body: JSON.stringify(ytMeta)
+          });
+          if (!initRes.ok) throw new Error('YT init failed: ' + await initRes.text());
+
+          const uploadUrl = initRes.headers.get('location');
+          const videoBuf = fs.readFileSync(localPath);
+          const upRes = await fetch(uploadUrl, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'video/mp4', 'Content-Length': videoBuf.length },
+            body: videoBuf
+          });
+          if (!upRes.ok) throw new Error('YT upload failed: ' + await upRes.text());
+          const ytData = await upRes.json();
+
+          // 5. Cleanup
+          if (fs.existsSync(localPath)) fs.unlinkSync(localPath);
+          if (deleteAfterUpload) {
+            await fetch(`https://www.googleapis.com/drive/v3/files/${file.id}`, {
+              method: 'DELETE', headers: { 'Authorization': `Bearer ${driveToken}` }
+            });
+          }
+
+          results.push({ file: file.name, videoId: ytData.id, url: `https://youtu.be/${ytData.id}`, status: 'ok' });
+          console.log('[AUTO] Done:', file.name, '→', ytData.id);
+
+        } catch (fileErr) {
+          console.error('[AUTO] Error on', file.name, ':', fileErr.message);
+          results.push({ file: file.name, error: fileErr.message, status: 'error' });
+        }
+
+        // Delay between uploads
+        await new Promise(r => setTimeout(r, 2000));
+      }
+
+      jobs[jobId] = { status: 'done', result: { success: true, total: files.length, results } };
+
+    } catch (err) {
+      console.error('[AUTO] Fatal:', err.message);
+      jobs[jobId] = { status: 'error', error: err.message };
+    }
+  })();
 });
