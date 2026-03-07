@@ -1848,7 +1848,8 @@ function updateQueueItem(item) {
 }
 
 function cancelAll() {
-  state.downloadQueue.forEach(i=>{ if(i.status==='pending') i.status='error'; });
+  state.isDownloading = false;
+  state.downloadQueue.forEach(i=>{ if(i.status==='pending'||i.status==='downloading') i.status='error'; });
   renderUrlList();
   toast('বাতিল করা হয়েছে');
 }
@@ -2118,7 +2119,8 @@ async function confirmAudioAssign() {
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify({
         videoPath: v.filepath,
-        audioPath: audio.filepath || audio.url
+        audioPath: audio.filepath || null,
+        audioUrl: audio.url || null
       })
     });
     
