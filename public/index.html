@@ -211,6 +211,9 @@ textarea.input{resize:none;min-height:80px}
       <button class="btn btn-red btn-full" onclick="startBulkDownload()">⬇️ বাল্ক ডাউনলোড</button>
       <button class="btn btn-ghost" onclick="clearUrls()">🗑 ক্লিয়ার</button>
     </div>
+    <div style="margin-top:8px">
+      <button class="btn btn-full" style="background:#059669;color:#fff" onclick="downloadAudioToDrive()">🎵 Audio নামাও → Drive-এ Save করো</button>
+    </div>
   </div>
 
   <div class="card" id="queueCard" style="display:none">
@@ -671,6 +674,66 @@ function setSource(el, src) {
 }
 
 function clearUrls() { document.getElementById('urlInput').value = ''; }
+
+async function downloadAudioToDrive() {
+  const url = document.getElementById('urlInput').value.trim().split('\n')[0].trim();
+  if (!url) { toast('URL দিন!'); return; }
+  const s = gs();
+  const audioFolderId = s.schedAudioFolderId || document.getElementById('schedAudioFolderId')?.value?.trim();
+  if (!audioFolderId) { toast('শিডিউল ট্যাবে Audio Folder ID দিন!'); return; }
+
+  const logBox = document.getElementById('dlLog');
+  document.getElementById('queueCard').style.display = 'block';
+  logBox.innerHTML = '';
+
+  const log = (msg) => { logBox.innerHTML += msg + '<br>'; logBox.scrollTop = logBox.scrollHeight; };
+
+  log('🎵 Audio download শুরু হচ্ছে...');
+
+  try {
+    // Step 1: Download audio
+    const dlRes = await fetch(getBackend() + '/api/download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, quality: 'best', audioOnly: true })
+    });
+    const { jobId } = await dlRes.json();
+    log('⏳ Download হচ্ছে...');
+
+    // Wait for download
+    let filePath = null, fileName = null;
+    for (let i = 0; i < 120; i++) {
+      await new Promise(r => setTimeout(r, 3000));
+      const jr = await fetch(getBackend() + '/api/job/' + jobId);
+      const job = await jr.json();
+      if (job.status === 'done') {
+        filePath = job.result?.filepath || job.result?.audioPath;
+        fileName = job.result?.filename || job.result?.title || 'audio';
+        log('✅ Download সম্পন্ন: ' + fileName);
+        break;
+      }
+      if (job.status === 'error') throw new Error(job.error);
+    }
+    if (!filePath) throw new Error('Download timeout');
+
+    // Step 2: Upload to Drive Audio Folder
+    log('☁️ Drive Audio Folder-এ upload হচ্ছে...');
+    const upRes = await fetch(getBackend() + '/api/drive/save-audio', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filePath, fileName, audioFolderId })
+    });
+    const upData = await upRes.json();
+    if (!upData.success) throw new Error(upData.error || 'Upload failed');
+
+    log('🎉 Drive-এ Save হয়েছে! ফাইল: ' + upData.fileName);
+    toast('✅ Audio Drive-এ Save হয়েছে!', 3000);
+
+  } catch(e) {
+    log('❌ Error: ' + e.message);
+    toast('❌ ' + e.message);
+  }
+}
 
 async function startBulkDownload() {
   const raw = document.getElementById('urlInput').value.trim();
