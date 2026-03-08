@@ -580,9 +580,9 @@ async function triggerAutoUpload(cfg) {
 
       if (!allVideos.length) { jobs[jobId] = { status: 'error', error: 'Drive-এ কোনো ভিডিও নেই' }; return; }
 
-      // Shuffle + limit
-      const videos = allVideos.sort(() => Math.random() - 0.5).slice(0, cfg.maxVideos || 3);
-      console.log('[SCHED] Processing', videos.length, 'videos');
+      // Shuffle all videos — audio duration অনুযায়ী যতটা দরকার নেবে
+      const videos = allVideos.sort(() => Math.random() - 0.5);
+      console.log('[SCHED] Total videos available:', videos.length);
 
       // Get audio files
       let audioFiles = [];
@@ -598,125 +598,206 @@ async function triggerAutoUpload(cfg) {
 
       const results = [];
 
-      for (const video of videos) {
-        const tempFiles = [];
-        console.log('[SCHED] Processing:', video.name);
-
+      // ===== HELPER: Get duration via ffprobe =====
+      async function getDuration(filePath) {
         try {
+          const { stdout } = await execAsync(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath}"`, { timeout: 15000 });
+          return parseFloat(stdout.trim()) || 0;
+        } catch { return 0; }
+      }
+
+      // ===== PROCESS: One upload per audio =====
+      // Pick one random audio → collect videos until duration fills up → merge → upload
+      if (audioFiles.length === 0) {
+        jobs[jobId] = { status: 'error', error: 'Audio Folder-এ কোনো audio নেই' };
+        return;
+      }
+
+      const tempAllFiles = [];
+
+      try {
+        // Pick random audio
+        const randomAudio = audioFiles[Math.floor(Math.random() * audioFiles.length)];
+        console.log('[SCHED] Audio:', randomAudio.name);
+
+        // Download audio
+        const audioDlRes = await fetch(`https://www.googleapis.com/drive/v3/files/${randomAudio.id}?alt=media`, {
+          headers: { 'Authorization': `Bearer ${driveToken}` }
+        });
+        if (!audioDlRes.ok) throw new Error('Audio download failed');
+        const audioPath = path.join(TEMP_DIR, `sched_audio_${Date.now()}${path.extname(randomAudio.name)}`);
+        fs.writeFileSync(audioPath, await audioDlRes.buffer());
+        tempAllFiles.push(audioPath);
+
+        const audioDuration = await getDuration(audioPath);
+        console.log('[SCHED] Audio duration:', audioDuration, 'sec');
+        if (!audioDuration) throw new Error('Audio duration মাপা গেলো না');
+
+        // Shuffle all videos
+        // Collect videos until total duration fills audio
+        let totalVideoDuration = 0;
+        const selectedVideoPaths = [];
+        const usedDriveVideoIds = []; // track which Drive videos were actually used
+
+        for (const video of videos) {
+          if (totalVideoDuration >= audioDuration) break;
+
           // Download video
           const dlRes = await fetch(`https://www.googleapis.com/drive/v3/files/${video.id}?alt=media`, {
             headers: { 'Authorization': `Bearer ${driveToken}` }
           });
-          if (!dlRes.ok) throw new Error('Drive download failed');
-          const videoPath = path.join(TEMP_DIR, `sched_${Date.now()}_${video.id}.mp4`);
+          if (!dlRes.ok) continue;
+
+          const videoPath = path.join(TEMP_DIR, `sched_v_${Date.now()}_${video.id}.mp4`);
           fs.writeFileSync(videoPath, await dlRes.buffer());
-          tempFiles.push(videoPath);
+          tempAllFiles.push(videoPath);
 
-          // Mute original video
-          const mutedPath = path.join(TEMP_DIR, `sched_muted_${Date.now()}.mp4`);
-          await execAsync(`ffmpeg -i "${videoPath}" -an -c:v copy -y "${mutedPath}"`, { timeout: 60000 });
-          tempFiles.push(mutedPath);
+          // Mute video
+          const mutedPath = path.join(TEMP_DIR, `sched_vm_${Date.now()}.mp4`);
+          let workingPath = videoPath;
+          try {
+            await execAsync(`ffmpeg -i "${videoPath}" -an -c:v copy -y "${mutedPath}"`, { timeout: 60000 });
+            tempAllFiles.push(mutedPath);
+            workingPath = mutedPath;
+          } catch { /* use original if mute fails */ }
 
-          let finalPath = mutedPath;
+          const vDur = await getDuration(workingPath);
+          if (!vDur) continue; // skip if can't measure
 
-          // Merge audio
-          if (audioFiles.length > 0) {
-            const randomAudio = audioFiles[Math.floor(Math.random() * audioFiles.length)];
-            const audioDlRes = await fetch(`https://www.googleapis.com/drive/v3/files/${randomAudio.id}?alt=media`, {
-              headers: { 'Authorization': `Bearer ${driveToken}` }
-            });
-            const audioPath = path.join(TEMP_DIR, `sched_audio_${Date.now()}${path.extname(randomAudio.name)}`);
-            fs.writeFileSync(audioPath, await audioDlRes.buffer());
-            tempFiles.push(audioPath);
+          totalVideoDuration += vDur;
+          console.log('[SCHED] Video:', video.name, vDur.toFixed(2), 'sec | Total:', totalVideoDuration.toFixed(2));
 
-            const mergedPath = path.join(TEMP_DIR, `sched_merged_${Date.now()}.mp4`);
-            await execAsync(`ffmpeg -i "${mutedPath}" -stream_loop -1 -i "${audioPath}" -map 0:v -map 1:a -c:v copy -c:a aac -shortest -y "${mergedPath}"`, { timeout: 120000 });
-            tempFiles.push(mergedPath);
-            finalPath = mergedPath;
-            console.log('[SCHED] Audio merged ✓');
-          }
-
-          // AI meta
-          const rawTitle = video.name.replace(/\.[^.]+$/, '').replace(/[_-]/g, ' ');
-          let meta = { title: rawTitle, description: '', hashtags: [], tags: [] };
-
-          if (cfg.aiService && cfg.aiKey) {
-            try {
-              const prompt = `You are an expert Islamic YouTube Shorts content creator for a Bengali audience. The audio file name is: "${rawTitle}" (this is the WAZ/MOTIVATION audio title - base your content on this). STRICT RULES: 1) Return ONLY valid JSON, zero explanation, zero markdown backticks. 2) Title: Bengali, emotional/motivational, emoji-rich (☪️🤲📿🕌✨), max 60 chars, inspired by the audio filename meaning. 3) Description: 3 lines Bengali Islamic motivation ending with relevant duas/ayat reference. 4) Hashtags: Mix HIGH volume + NICHE tags. Use these proven viral Islamic hashtags: #shorts #islamicshorts #waz #islamicvideo #quran #allah #islam #muslim #bangla #bangladesh #viral #islamicmotivation #deen #alhamdulillah #subhanallah — then add 5 more relevant to the audio topic. Total exactly 20 hashtags. 5) Tags: Include both Bengali phonetic + English SEO tags. Must include: islamic shorts, bangla waz, islamic motivation, quran, allah, muslim, bangladesh, viral islamic, waz mahfil, islamic video bangla, deen, hadith, sunnah, islamic quotes — then add topic-specific tags. Total exactly 25 tags. Return exactly: {"title":"বাংলা ইসলামিক টাইটেল ☪️","description":"লাইন ১
-লাইন ২
-লাইন ৩","hashtags":["#shorts",...exactly 20],"tags":["islamic shorts",...exactly 25]}`;
-              let aiText = '';
-              if (cfg.aiService === 'gemini') {
-                const ar = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${cfg.aiKey}`, {
-                  method: 'POST', headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
-                });
-                aiText = (await ar.json()).candidates?.[0]?.content?.parts?.[0]?.text || '';
-              } else if (cfg.aiService === 'groq') {
-                const ar = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-                  method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.aiKey}` },
-                  body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'user', content: prompt }], max_tokens: 800 })
-                });
-                aiText = (await ar.json()).choices?.[0]?.message?.content || '';
-              } else if (cfg.aiService === 'grok') {
-                const ar = await fetch('https://api.x.ai/v1/chat/completions', {
-                  method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.aiKey}` },
-                  body: JSON.stringify({ model: 'grok-3-mini', messages: [{ role: 'user', content: prompt }], max_tokens: 800 })
-                });
-                aiText = (await ar.json()).choices?.[0]?.message?.content || '';
+          // If this video makes total exceed audio → trim it to fit exactly
+          if (totalVideoDuration > audioDuration) {
+            const excess = totalVideoDuration - audioDuration;
+            const trimDur = vDur - excess;
+            if (trimDur > 0.5) {
+              const trimmedPath = path.join(TEMP_DIR, `sched_vt_${Date.now()}.mp4`);
+              try {
+                await execAsync(`ffmpeg -i "${workingPath}" -t ${trimDur.toFixed(3)} -c:v copy -y "${trimmedPath}"`, { timeout: 60000 });
+                tempAllFiles.push(trimmedPath);
+                selectedVideoPaths.push(trimmedPath);
+                usedDriveVideoIds.push(video.id);
+                console.log('[SCHED] Last video trimmed to:', trimDur.toFixed(2), 'sec');
+              } catch {
+                // trim failed — skip this video, don't add (would exceed audio)
+                console.warn('[SCHED] Trim failed, skipping last video');
               }
-              if (aiText) {
-                const parsed = JSON.parse(aiText.replace(/```json\n?/g,'').replace(/```\n?/g,'').trim());
-                meta = { ...meta, ...parsed };
-              }
-            } catch(e) { console.warn('[SCHED] AI failed:', e.message); }
+            }
+            // Stop regardless — we've filled the audio duration
+            break;
           }
 
-          // Upload YouTube
-          const fullDesc = `${meta.description || ''}\n\n${(meta.hashtags || []).join(' ')}`.trim();
-          const ytMeta = {
-            snippet: { title: (meta.title || rawTitle).substring(0, 100), description: fullDesc.substring(0, 5000), tags: (meta.tags || []).slice(0, 30), categoryId: '22' },
-            status: { privacyStatus: cfg.privacy || 'private', selfDeclaredMadeForKids: false }
-          };
-
-          const fileSize = fs.statSync(finalPath).size;
-          const initRes = await fetch('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status', {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${ytToken}`, 'Content-Type': 'application/json', 'X-Upload-Content-Type': 'video/mp4', 'X-Upload-Content-Length': fileSize },
-            body: JSON.stringify(ytMeta)
-          });
-          if (!initRes.ok) throw new Error('YT init: ' + await initRes.text());
-
-          const uploadUrl = initRes.headers.get('location');
-          const videoBuf = fs.readFileSync(finalPath);
-          const upRes = await fetch(uploadUrl, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'video/mp4', 'Content-Length': videoBuf.length },
-            body: videoBuf
-          });
-          if (!upRes.ok) throw new Error('YT upload: ' + await upRes.text());
-          const ytData = await upRes.json();
-
-          // Cleanup temp
-          tempFiles.forEach(f => { try { if(fs.existsSync(f)) fs.unlinkSync(f); } catch {} });
-
-          // Delete from Drive
-          if (cfg.deleteAfterUpload) {
-            await fetch(`https://www.googleapis.com/drive/v3/files/${video.id}`, {
-              method: 'DELETE', headers: { 'Authorization': `Bearer ${driveToken}` }
-            });
-          }
-
-          results.push({ file: video.name, videoId: ytData.id, url: `https://youtu.be/${ytData.id}`, title: meta.title, status: 'ok' });
-          console.log('[SCHED] Uploaded:', video.name, '→', ytData.id);
-
-        } catch(e) {
-          tempFiles.forEach(f => { try { if(fs.existsSync(f)) fs.unlinkSync(f); } catch {} });
-          results.push({ file: video.name, error: e.message, status: 'error' });
-          console.error('[SCHED] Error:', video.name, e.message);
+          selectedVideoPaths.push(workingPath);
+          usedDriveVideoIds.push(video.id);
         }
 
-        await new Promise(r => setTimeout(r, 3000));
+        if (!selectedVideoPaths.length) throw new Error('কোনো video process করা গেলো না');
+        console.log('[SCHED] Total videos collected:', selectedVideoPaths.length);
+
+        // Concat all videos
+        let finalVideoPath;
+        if (selectedVideoPaths.length === 1) {
+          finalVideoPath = selectedVideoPaths[0];
+        } else {
+          // Create concat list file
+          const concatFile = path.join(TEMP_DIR, `sched_concat_${Date.now()}.txt`);
+          fs.writeFileSync(concatFile, selectedVideoPaths.map(p => `file '${p}'`).join('\n'));
+          tempAllFiles.push(concatFile);
+
+          finalVideoPath = path.join(TEMP_DIR, `sched_concat_out_${Date.now()}.mp4`);
+          await execAsync(`ffmpeg -f concat -safe 0 -i "${concatFile}" -c:v copy -y "${finalVideoPath}"`, { timeout: 120000 });
+          tempAllFiles.push(finalVideoPath);
+          console.log('[SCHED] Videos concatenated ✓');
+        }
+
+        // Merge audio with concatenated video
+        const mergedPath = path.join(TEMP_DIR, `sched_final_${Date.now()}.mp4`);
+        await execAsync(`ffmpeg -i "${finalVideoPath}" -i "${audioPath}" -map 0:v -map 1:a -c:v copy -c:a aac -shortest -y "${mergedPath}"`, { timeout: 180000 });
+        tempAllFiles.push(mergedPath);
+        console.log('[SCHED] Final merge done ✓');
+
+        // AI meta — audio filename দেখে title
+        const rawTitle = randomAudio.name.replace(/\.[^.]+$/, '').replace(/[_-]/g, ' ');
+        let meta = { title: rawTitle, description: '', hashtags: [], tags: [] };
+
+        if (cfg.aiService && cfg.aiKey) {
+          try {
+            const prompt = `You are an expert Islamic YouTube Shorts content creator for a Bengali audience. The audio file name is: "${rawTitle}" (this is the WAZ/MOTIVATION audio title - base your content on this). STRICT RULES: 1) Return ONLY valid JSON, zero explanation, zero markdown backticks. 2) Title: Bengali, emotional/motivational, emoji-rich (☪️🤲📿🕌✨), max 60 chars, inspired by the audio filename meaning. 3) Description: 3 lines Bengali Islamic motivation ending with relevant duas/ayat reference. 4) Hashtags: Mix HIGH volume + NICHE tags. Use these proven viral Islamic hashtags: #shorts #islamicshorts #waz #islamicvideo #quran #allah #islam #muslim #bangla #bangladesh #viral #islamicmotivation #deen #alhamdulillah #subhanallah — then add 5 more relevant to the audio topic. Total exactly 20 hashtags. 5) Tags: Include both Bengali phonetic + English SEO tags. Must include: islamic shorts, bangla waz, islamic motivation, quran, allah, muslim, bangladesh, viral islamic, waz mahfil, islamic video bangla, deen, hadith, sunnah, islamic quotes — then add topic-specific tags. Total exactly 25 tags. Return exactly: {"title":"বাংলা ইসলামিক টাইটেল ☪️","description":"লাইন ১\nলাইন ২\nলাইন ৩","hashtags":["#shorts",...exactly 20],"tags":["islamic shorts",...exactly 25]}`;
+            let aiText = '';
+            if (cfg.aiService === 'gemini') {
+              const ar = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${cfg.aiKey}`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+              });
+              aiText = (await ar.json()).candidates?.[0]?.content?.parts?.[0]?.text || '';
+            } else if (cfg.aiService === 'groq') {
+              const ar = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.aiKey}` },
+                body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'user', content: prompt }], max_tokens: 800 })
+              });
+              aiText = (await ar.json()).choices?.[0]?.message?.content || '';
+            } else if (cfg.aiService === 'grok') {
+              const ar = await fetch('https://api.x.ai/v1/chat/completions', {
+                method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.aiKey}` },
+                body: JSON.stringify({ model: 'grok-3-mini', messages: [{ role: 'user', content: prompt }], max_tokens: 800 })
+              });
+              aiText = (await ar.json()).choices?.[0]?.message?.content || '';
+            }
+            if (aiText) {
+              const parsed = JSON.parse(aiText.replace(/```json\n?/g,'').replace(/```\n?/g,'').trim());
+              meta = { ...meta, ...parsed };
+            }
+          } catch(e) { console.warn('[SCHED] AI failed:', e.message); }
+        }
+
+        // Upload YouTube
+        const fullDesc = `${meta.description || ''}\n\n${(meta.hashtags || []).join(' ')}`.trim();
+        const ytMeta = {
+          snippet: { title: (meta.title || rawTitle).substring(0, 100), description: fullDesc.substring(0, 5000), tags: (meta.tags || []).slice(0, 30), categoryId: '22' },
+          status: { privacyStatus: cfg.privacy || 'private', selfDeclaredMadeForKids: false }
+        };
+
+        const fileSize = fs.statSync(mergedPath).size;
+        const initRes = await fetch('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${ytToken}`, 'Content-Type': 'application/json', 'X-Upload-Content-Type': 'video/mp4', 'X-Upload-Content-Length': fileSize },
+          body: JSON.stringify(ytMeta)
+        });
+        if (!initRes.ok) throw new Error('YT init: ' + await initRes.text());
+
+        const uploadUrl = initRes.headers.get('location');
+        const videoBuf = fs.readFileSync(mergedPath);
+        const upRes = await fetch(uploadUrl, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'video/mp4', 'Content-Length': videoBuf.length },
+          body: videoBuf
+        });
+        if (!upRes.ok) throw new Error('YT upload: ' + await upRes.text());
+        const ytData = await upRes.json();
+
+        // Delete used videos from Drive
+        if (cfg.deleteAfterUpload) {
+          for (const videoId of usedDriveVideoIds) {
+            try {
+              await fetch(`https://www.googleapis.com/drive/v3/files/${videoId}`, {
+                method: 'DELETE', headers: { 'Authorization': `Bearer ${driveToken}` }
+              });
+              console.log('[SCHED] Deleted from Drive:', videoId);
+            } catch {}
+          }
+        }
+
+        // Cleanup temp
+        tempAllFiles.forEach(f => { try { if(fs.existsSync(f)) fs.unlinkSync(f); } catch {} });
+
+        results.push({ audioFile: randomAudio.name, videoCount: selectedVideoPaths.length, videoId: ytData.id, url: `https://youtu.be/${ytData.id}`, title: meta.title, status: 'ok' });
+        console.log('[SCHED] Uploaded:', ytData.id, '| Videos used:', selectedVideoPaths.length);
+
+      } catch(err) {
+        tempAllFiles.forEach(f => { try { if(fs.existsSync(f)) fs.unlinkSync(f); } catch {} });
+        results.push({ error: err.message, status: 'error' });
+        console.error('[SCHED] Error:', err.message);
       }
 
       jobs[jobId] = { status: 'done', result: { total: videos.length, results } };
