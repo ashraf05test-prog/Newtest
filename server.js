@@ -42,7 +42,7 @@ app.get('/api/job/:jobId', (req, res) => {
 
 // ========== DOWNLOAD ==========
 app.post('/api/download', async (req, res) => {
-  const { url, quality = 'best', mute = true } = req.body;
+  const { url, quality = 'best', mute = true, audioOnly = false } = req.body;
   if (!url) return res.status(400).json({ error: 'URL required' });
 
   const jobId = createJob();
@@ -51,6 +51,20 @@ app.post('/api/download', async (req, res) => {
   (async () => {
     try {
       const outTemplate = path.join(TEMP_DIR, `${jobId}.%(ext)s`);
+
+      // Audio only mode
+      if (audioOnly) {
+        const cmd = `yt-dlp -f "bestaudio/best" --extract-audio --audio-format mp3 --audio-quality 192K --no-playlist --retries 3 --socket-timeout 30 --no-warnings -o "${outTemplate}" "${url}"`;
+        console.log('[DL AUDIO]', url);
+        await execAsync(cmd, { timeout: 120000 });
+        const files = fs.readdirSync(TEMP_DIR);
+        const mp3 = files.find(f => f.startsWith(jobId) && f.match(/\.(mp3|m4a|ogg|opus|wav)$/i));
+        if (!mp3) throw new Error('Audio download ব্যর্থ');
+        const audioPath = path.join(TEMP_DIR, mp3);
+        const title = mp3.replace(/^[^_]+_/, '').replace(/\.[^.]+$/, '');
+        jobs[jobId] = { status: 'done', result: { filepath: audioPath, filename: mp3, title, size: fs.statSync(audioPath).size / (1024*1024) } };
+        return;
+      }
 
       let fmt = 'best[ext=mp4]/best';
       if (quality === '1080p') fmt = 'bestvideo[height<=1080][ext=mp4]+bestaudio/best[height<=1080]/best';
@@ -730,6 +744,59 @@ app.listen(PORT, () => {
 });
 
 // ========== DRIVE AUTO UPLOAD SYSTEM ==========
+
+
+// Save downloaded audio to Drive Audio Folder
+app.post('/api/drive/save-audio', async (req, res) => {
+  const { filePath, fileName, audioFolderId } = req.body;
+  try {
+    const fetch = (await import('node-fetch')).default;
+    const t = loadTokens();
+    const driveToken = t.drive_access_token;
+    if (!driveToken) throw new Error('Drive সংযুক্ত নয়');
+    if (!audioFolderId) throw new Error('Audio Folder ID নেই');
+
+    // Find the actual file
+    let actualPath = filePath;
+    if (!actualPath || !fs.existsSync(actualPath)) {
+      // Search in TEMP_DIR
+      const files = fs.readdirSync(TEMP_DIR).filter(f => f.match(/\.(mp3|m4a|wav|aac|ogg|opus)$/i));
+      if (!files.length) throw new Error('Audio ফাইল পাওয়া গেলো না');
+      // Get most recent
+      actualPath = path.join(TEMP_DIR, files.sort((a, b) => {
+        return fs.statSync(path.join(TEMP_DIR, b)).mtime - fs.statSync(path.join(TEMP_DIR, a)).mtime;
+      })[0]);
+    }
+
+    const fileBuffer = fs.readFileSync(actualPath);
+    const ext = path.extname(actualPath) || '.mp3';
+    const cleanName = (fileName || path.basename(actualPath)).replace(/[^\w\s\u0980-\u09FF.-]/g, '').trim() + (fileName?.includes('.') ? '' : ext);
+    const mimeType = ext === '.mp3' ? 'audio/mpeg' : ext === '.m4a' ? 'audio/mp4' : ext === '.wav' ? 'audio/wav' : 'audio/mpeg';
+
+    // Upload to Drive
+    const metadata = { name: cleanName, parents: [audioFolderId] };
+    const boundary = 'audio_boundary_' + Date.now();
+    const metaPart = Buffer.from(`--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(metadata)}\r\n`);
+    const dataPart = Buffer.from(`--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`);
+    const endPart = Buffer.from(`\r\n--${boundary}--`);
+    const body = Buffer.concat([metaPart, dataPart, fileBuffer, endPart]);
+
+    const upRes = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${driveToken}`, 'Content-Type': `multipart/related; boundary=${boundary}`, 'Content-Length': body.length },
+      body
+    });
+    const upData = await upRes.json();
+    if (!upData.id) throw new Error(upData.error?.message || 'Upload failed');
+
+    // Cleanup temp file
+    try { fs.unlinkSync(actualPath); } catch {}
+
+    res.json({ success: true, fileId: upData.id, fileName: cleanName });
+  } catch(err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 // List files in Drive folder
 app.get('/api/drive/list', async (req, res) => {
