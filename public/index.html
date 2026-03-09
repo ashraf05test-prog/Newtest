@@ -382,6 +382,16 @@ textarea.input{resize:none;min-height:80px}
     <button class="btn btn-red btn-full" onclick="uploadSelected()">📤 আপলোড করো</button>
   </div>
   <div class="log-box" id="uploadLog" style="height:120px"></div>
+
+  <!-- Manual Thumbnail -->
+  <div class="card" style="margin-top:10px">
+    <div class="card-title">🖼 Thumbnail Set করো</div>
+    <div style="font-size:12px;color:var(--text2);margin-bottom:10px">Upload করা video-র YouTube ID দাও → AI title দিয়ে thumbnail বানাবে</div>
+    <input class="input" id="thumbVideoId" placeholder="YouTube Video ID (e.g. udSnSmFXNrg)" style="margin-bottom:8px">
+    <input class="input" id="thumbTitle" placeholder="Thumbnail-এ title (বাংলায়)" style="margin-bottom:8px">
+    <button class="btn btn-full" style="background:#059669;color:#fff" onclick="setManualThumbnail()">🖼 Thumbnail Generate + Set করো</button>
+    <div id="thumbLog" style="font-size:12px;color:var(--text2);margin-top:8px"></div>
+  </div>
 </div>
 
 <!-- 6. SCHEDULE -->
@@ -1776,7 +1786,14 @@ async function runNow() {
         const res = job.result;
         schedLog(`✅ সম্পন্ন! সফল: ${res.results.filter(r=>r.status==='ok').length}/${res.total}`);
         res.results.forEach(r => {
-          if (r.status === 'ok') schedLog(`  ✓ ${r.audioFile || r.title || 'video'} → youtu.be/${r.videoId}`);
+          if (r.status === 'ok') {
+            schedLog(`  ✓ ${r.audioFile || r.title || 'video'} → youtu.be/${r.videoId}`);
+            // Auto fill thumbnail fields
+            if (r.videoId) {
+              document.getElementById('thumbVideoId').value = r.videoId;
+              if (r.title) document.getElementById('thumbTitle').value = r.title;
+            }
+          }
           else schedLog(`  ✗ ${r.error}`, true);
         });
         break;
@@ -2020,6 +2037,31 @@ function copyAllChannelLinks() {
   navigator.clipboard?.writeText(urls).then(() => toast(`📋 ${channelLinks.length}টি link copy হয়েছে!`));
 }
 
+
+// ===== Manual Thumbnail =====
+async function setManualThumbnail() {
+  const videoId = document.getElementById('thumbVideoId').value.trim();
+  const title = document.getElementById('thumbTitle').value.trim();
+  const log = document.getElementById('thumbLog');
+  if (!videoId) { toast('Video ID দিন!'); return; }
+  if (!title) { toast('Title দিন!'); return; }
+  log.textContent = '⏳ Thumbnail বানানো হচ্ছে...';
+  try {
+    const r = await fetch(getBackend() + '/api/thumbnail/generate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ videoId, title })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error);
+    log.textContent = '✅ Thumbnail set হয়েছে!';
+    log.style.color = 'var(--green)';
+  } catch(e) {
+    log.textContent = '❌ ' + e.message;
+    log.style.color = 'var(--red)';
+  }
+}
+
+// Auto-fill thumbVideoId + thumbTitle after upload
 // ===== SSE Live Log =====
 let sseSource = null;
 function startLiveLog() {
