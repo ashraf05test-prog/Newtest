@@ -580,9 +580,10 @@ async function triggerAutoUpload(cfg) {
 
       if (!allVideos.length) { jobs[jobId] = { status: 'error', error: 'Drive-এ কোনো ভিডিও নেই' }; return; }
 
-      // Shuffle all videos — audio duration অনুযায়ী যতটা দরকার নেবে
-      const videos = allVideos.sort(() => Math.random() - 0.5);
-      console.log('[SCHED] Total videos available:', videos.length);
+      // Shuffle all videos — maxVideos দিয়ে cap করো
+      const maxV = parseInt(cfg.maxVideos) || 5;
+      const videos = allVideos.sort(() => Math.random() - 0.5).slice(0, maxV);
+      console.log(`[SCHED] Total videos available: ${allVideos.length} | Using max: ${maxV}`);
 
       // Get audio files
       let audioFiles = [];
@@ -718,7 +719,7 @@ async function triggerAutoUpload(cfg) {
         console.log('[SCHED] Final merge done ✓');
 
         // AI meta — audio filename দেখে title/hashtag/tags
-        const rawTitle = randomAudio.name.replace(/\.[^.]+$/, '').replace(/[_-]/g, ' ').trim();
+        const rawTitle = randomAudio.name.replace(/\.[^.]+$/, '').replace(/[_-]/g, ' ').replace(/\d{4}[\s_-]\d{2}[\s_-]\d{2}.*$/, '').replace(/AUDIO/gi, '').replace(/\s+/g, ' ').trim() || 'ইসলামিক ওয়াজ';
 
         // ===== Full Fallback (AI fail হলেও এটা use হবে) =====
         const fallbackHashtags = [
