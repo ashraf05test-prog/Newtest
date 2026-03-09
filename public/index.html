@@ -1,1870 +1,1628 @@
-<!DOCTYPE html>
-<html lang="bn">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>YT Automation Pro</title>
-<style>
-*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-:root{
-  --bg:#0a0a0f;--surface:#12121a;--surface2:#1a1a26;--surface3:#22223a;
-  --accent:#ff3c5f;--accent2:#06d6a0;--accent3:#845ef7;--accent4:#ffd43b;
-  --text:#f0f0ff;--text2:#9090b0;--border:#2a2a3a;
-  --green:#06d6a0;--red:#ff3c5f;--purple:#845ef7;--blue:#339af0;--yellow:#ffd43b;
+const express = require('express');
+const cors = require('cors');
+const path = require('path');
+const multer = require('multer');
+const upload = multer({ dest: path.join(__dirname, 'temp') });
+const fs = require('fs');
+const { exec } = require('child_process');
+const { promisify } = require('util');
+const execAsync = promisify(exec);
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+const TEMP_DIR = path.join(__dirname, 'temp');
+
+if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
+
+app.use(cors());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.static(path.join(__dirname, 'public')));
+app.use('/temp', express.static(TEMP_DIR));
+
+// ========== JOB SYSTEM ==========
+const jobs = {};
+
+function createJob() {
+  const id = Date.now() + '_' + Math.random().toString(36).substr(2, 8);
+  jobs[id] = { status: 'processing' };
+  setTimeout(() => delete jobs[id], 10 * 60 * 1000);
+  return id;
 }
-body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100vh;padding-bottom:80px}
-/* HEADER */
-.header{background:var(--surface);padding:12px 16px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;border-bottom:1px solid var(--border)}
-.header-logo{display:flex;align-items:center;gap:10px}
-.logo-icon{width:36px;height:36px;background:#ff0000;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:18px}
-.logo-text{font-size:16px;font-weight:700}
-.logo-sub{font-size:11px;color:var(--text2)}
-.conn-dot{width:8px;height:8px;border-radius:50%;background:#444;display:inline-block}
-.conn-dot.active{background:var(--green);box-shadow:0 0 6px var(--green)}
-.conn-status{font-size:12px;color:var(--text2);display:flex;align-items:center;gap:6px}
-/* TABS */
-.bottom-nav{position:fixed;bottom:0;left:0;right:0;background:var(--surface);border-top:1px solid var(--border);display:flex;z-index:100}
-.nav-item{flex:1;display:flex;flex-direction:column;align-items:center;padding:8px 4px;cursor:pointer;color:var(--text2);font-size:10px;gap:2px;transition:color .2s}
-.nav-item.active{color:var(--accent)}
-.nav-item .icon{font-size:20px}
-/* PANELS */
-.panel{display:none;padding:16px}
-.panel.active{display:block}
-/* CARDS */
-.card{background:var(--surface2);border-radius:14px;padding:14px;margin-bottom:12px;border:1px solid var(--border)}
-.card-title{font-size:13px;font-weight:700;color:var(--text2);margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px}
-/* INPUTS */
-.input{width:100%;background:var(--surface3);border:1px solid var(--border);border-radius:10px;padding:10px 12px;color:var(--text);font-size:14px;outline:none}
-.input:focus{border-color:var(--accent3)}
-textarea.input{resize:none;min-height:80px}
-/* BUTTONS */
-.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:10px 16px;border-radius:10px;border:none;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;white-space:nowrap}
-.btn-sm{padding:7px 12px;font-size:12px;border-radius:8px}
-.btn-xs{padding:5px 8px;font-size:11px;border-radius:6px}
-.btn-full{width:100%}
-.btn-red{background:var(--red);color:#fff}
-.btn-green{background:var(--green);color:#000}
-.btn-purple{background:var(--purple);color:#fff}
-.btn-blue{background:var(--blue);color:#fff}
-.btn-yellow{background:var(--yellow);color:#000}
-.btn-ghost{background:var(--surface3);color:var(--text);border:1px solid var(--border)}
-.btn:active{transform:scale(.96)}
-/* CHIPS */
-.chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
-.chip{padding:6px 12px;border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;border:1.5px solid var(--border);background:var(--surface3);color:var(--text2);transition:all .2s}
-.chip.on{background:var(--accent3);color:#fff;border-color:var(--accent3)}
-/* URL LIST */
-.url-list{display:flex;flex-direction:column;gap:6px;margin-bottom:10px}
-.url-item{display:flex;align-items:center;gap:8px;background:var(--surface3);border-radius:8px;padding:8px 10px}
-.url-text{flex:1;font-size:12px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.url-badge{font-size:11px;font-weight:700;padding:3px 8px;border-radius:10px;white-space:nowrap}
-.badge-wait{background:#2a2a3a;color:var(--text2)}
-.badge-dl{background:rgba(132,94,247,.3);color:var(--purple)}
-.badge-done{background:rgba(6,214,160,.2);color:var(--green)}
-.badge-err{background:rgba(255,60,95,.2);color:var(--red)}
-/* PROGRESS */
-.progress-bar{height:5px;background:var(--surface3);border-radius:10px;overflow:hidden;margin:6px 0}
-.progress-fill{height:100%;background:linear-gradient(90deg,var(--accent3),var(--accent2));border-radius:10px;transition:width .4s}
-/* LOG */
-.log-box{background:#0d0d14;border-radius:10px;padding:10px;font-family:monospace;font-size:11px;height:100px;overflow-y:auto;color:var(--accent2);border:1px solid var(--border)}
-.log-err{color:var(--red)}
-/* VIDEO GRID */
-.video-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.video-card{background:var(--surface2);border-radius:12px;overflow:hidden;border:2px solid transparent;cursor:pointer;transition:border-color .2s}
-.video-card.selected{border-color:var(--accent3)}
-.v-thumb{position:relative;width:100%;padding-top:56.25%;background:var(--surface3);overflow:hidden}
-.v-thumb img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
-.v-thumb-icon{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:32px}
-.v-play-btn{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:44px;height:44px;background:rgba(0,0,0,.75);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;border:2px solid rgba(255,255,255,.3);z-index:3;backdrop-filter:blur(4px);transition:background .2s}
-.v-play-btn:active{background:rgba(132,94,247,.8)}
-.v-badge{position:absolute;top:6px;left:6px;background:rgba(255,60,95,.85);color:#fff;font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px}
-.v-audio-badge{position:absolute;bottom:6px;left:6px;background:rgba(6,214,160,.85);color:#000;font-size:9px;font-weight:700;padding:2px 7px;border-radius:10px;max-width:70%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.v-dur{position:absolute;bottom:6px;right:6px;background:rgba(0,0,0,.75);color:#fff;font-size:10px;padding:2px 6px;border-radius:6px}
-.v-sel{position:absolute;top:6px;right:6px;width:20px;height:20px;border-radius:50%;background:var(--accent3);display:flex;align-items:center;justify-content:center;font-size:11px}
-.v-info{padding:8px}
-.v-title{font-size:12px;font-weight:600;color:var(--text);margin-bottom:4px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
-.v-meta{font-size:10px;color:var(--text2);display:flex;gap:6px;align-items:center}
-.v-actions{display:flex;gap:4px;padding:0 8px 8px;flex-wrap:wrap}
-/* BULK BAR */
-.bulk-bar{position:fixed;top:64px;left:0;right:0;background:var(--red);padding:10px 16px;display:none;align-items:center;gap:8px;z-index:99}
-.bulk-bar.show{display:flex}
-.bulk-text{font-size:13px;font-weight:700;flex:1}
-/* FILTER CHIPS */
-.filter-row{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;margin-bottom:12px;scrollbar-width:none}
-.filter-row::-webkit-scrollbar{display:none}
-/* AUDIO LIST */
-.audio-item{display:flex;align-items:center;gap:10px;background:var(--surface3);border-radius:10px;padding:10px 12px;margin-bottom:8px;cursor:pointer;border:2px solid transparent}
-.audio-item.selected{border-color:var(--accent3)}
-.audio-icon{font-size:24px;flex-shrink:0}
-.audio-info{flex:1;overflow:hidden}
-.audio-name{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.audio-meta{font-size:11px;color:var(--text2)}
-/* AI PANEL */
-.ai-result{background:var(--surface3);border-radius:10px;padding:12px;margin-top:10px}
-.ai-field{margin-bottom:10px}
-.ai-label{font-size:11px;color:var(--text2);font-weight:700;margin-bottom:4px;text-transform:uppercase}
-.ai-value{font-size:13px;color:var(--text)}
-.tags-wrap{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
-.tag{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:11px;color:var(--text2)}
-/* CONNECT CARDS */
-.connect-card{background:var(--surface2);border-radius:14px;padding:14px;margin-bottom:12px;border:1px solid var(--border);display:flex;align-items:center;gap:12px}
-.connect-card.connected{border-color:var(--green)}
-.connect-icon{font-size:28px;flex-shrink:0}
-.connect-info{flex:1}
-.connect-title{font-size:14px;font-weight:700}
-.connect-sub{font-size:12px;color:var(--text2)}
-.connect-sub.ok{color:var(--green)}
-/* MODAL */
-.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:200;display:none;align-items:flex-end}
-.modal-overlay.open{display:flex}
-.modal-box{background:var(--surface);border-radius:20px 20px 0 0;width:100%;max-height:85vh;overflow-y:auto;padding:20px 16px;padding-bottom:30px}
-.modal-handle{width:40px;height:4px;background:var(--border);border-radius:2px;margin:0 auto 16px}
-.modal-title{font-size:16px;font-weight:700;margin-bottom:14px}
-/* FULLSCREEN PREVIEW */
-.preview-overlay{position:fixed;inset:0;background:#000;z-index:300;display:none;flex-direction:column}
-.preview-overlay.open{display:flex}
-.preview-top{position:absolute;top:0;left:0;right:0;padding:50px 16px 16px;background:linear-gradient(to bottom,rgba(0,0,0,.85),transparent);z-index:5;display:flex;align-items:center;gap:10px}
-.preview-close{width:40px;height:40px;background:rgba(255,255,255,.15);border:none;border-radius:50%;color:#fff;font-size:18px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0}
-.preview-top-title{font-size:13px;font-weight:600;color:#fff;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.preview-video-wrap{flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden}
-.preview-video-wrap video{width:100%;height:100%;object-fit:contain}
-.preview-bottom{position:absolute;bottom:0;left:0;right:0;padding:16px 16px 32px;background:linear-gradient(to top,rgba(0,0,0,.9),transparent);z-index:5}
-.preview-title{font-size:14px;font-weight:700;color:#fff;margin-bottom:4px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
-.preview-sub{font-size:11px;color:rgba(255,255,255,.5);margin-bottom:10px}
-.preview-actions{display:flex;gap:8px;flex-wrap:wrap}
-/* SCHEDULE */
-.schedule-item{background:var(--surface2);border-radius:10px;padding:12px;margin-bottom:8px;display:flex;align-items:center;gap:10px;border:1px solid var(--border)}
-/* SETTINGS */
-.setting-row{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--border)}
-.setting-label{font-size:14px;font-weight:600}
-.setting-sub{font-size:12px;color:var(--text2)}
-.toggle{width:44px;height:24px;background:var(--surface3);border-radius:12px;position:relative;cursor:pointer;transition:background .2s;border:none;flex-shrink:0}
-.toggle.on{background:var(--accent3)}
-.toggle::after{content:'';position:absolute;top:3px;left:3px;width:18px;height:18px;background:#fff;border-radius:50%;transition:left .2s}
-.toggle.on::after{left:23px}
-/* SECTION TITLE */
-.sec-title{font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
-/* DAY BUTTONS */
-.dbtn{background:var(--surface3);color:var(--text2);border-radius:6px;font-size:10px;padding:6px 2px;text-align:center;cursor:pointer;font-weight:600;border:1px solid var(--border);transition:all .2s}
-.dbtn.on{background:var(--accent);color:#fff;border-color:var(--accent)}
-/* TIME SLOT */
-.slot-item{display:flex;align-items:center;gap:8px;background:var(--surface3);border-radius:10px;padding:10px 12px;margin-bottom:8px}
-.slot-time{font-size:16px;font-weight:700;color:var(--yellow);min-width:55px;font-family:monospace}
-.slot-label{flex:1;font-size:13px;color:var(--text)}
-.slot-toggle{width:38px;height:21px;background:var(--surface2);border-radius:10px;position:relative;cursor:pointer;transition:background .2s;border:none;flex-shrink:0}
-.slot-toggle.on{background:var(--accent3)}
-.slot-toggle::after{content:'';position:absolute;top:2px;left:2px;width:17px;height:17px;background:#fff;border-radius:50%;transition:left .2s}
-.slot-toggle.on::after{left:19px}
-/* UPLOAD FORM */
-.upload-form-field{margin-bottom:10px}
-.upload-form-label{font-size:12px;color:var(--text2);margin-bottom:4px;display:block}
-</style>
-</head>
-<body>
 
-<!-- HEADER -->
-<div class="header">
-  <div class="header-logo">
-    <div class="logo-icon">▶</div>
-    <div>
-      <div class="logo-text">YT Automation</div>
-      <div class="logo-sub">Pro v2.0</div>
-    </div>
-  </div>
-  <div class="conn-status">
-    <span class="conn-dot" id="connDot"></span>
-    <span id="connText">Connecting...</span>
-  </div>
-</div>
+app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date() }));
 
-<!-- BULK BAR -->
-<div class="bulk-bar" id="bulkBar">
-  <span class="bulk-text" id="bulkText">0টি সিলেক্ট</span>
-  <button class="btn btn-sm btn-green" onclick="bulkUpload()">📤 আপলোড</button>
-  <button class="btn btn-sm btn-yellow" onclick="bulkZip()">📦 ZIP</button>
-  <button class="btn btn-sm btn-ghost" onclick="clearSelection()">✕</button>
-</div>
-
-<!-- PANELS -->
-<!-- 1. DOWNLOAD -->
-<div class="panel active" id="panel-dl">
-  <div class="card">
-    <div class="card-title">🔗 ভিডিও URL</div>
-    <textarea class="input" id="urlInput" placeholder="এক লাইনে একটি URL&#10;https://vt.tiktok.com/...&#10;https://youtube.com/..." rows="5"></textarea>
-    <div style="margin:10px 0">
-      <div class="sec-title">কোয়ালিটি</div>
-      <div class="chips" id="qualityChips">
-        <div class="chip on" onclick="setQuality(this,'best')">🔥 Best</div>
-        <div class="chip" onclick="setQuality(this,'1080p')">HD</div>
-        <div class="chip" onclick="setQuality(this,'720p')">720p</div>
-        <div class="chip" onclick="setQuality(this,'480p')">480p</div>
-      </div>
-    </div>
-    <div style="margin-bottom:10px">
-      <div class="sec-title">সোর্স</div>
-      <div class="chips" id="sourceChips">
-        <div class="chip on" onclick="setSource(this,'auto')">🔥 Auto (TikTok/YT)</div>
-        <div class="chip" onclick="setSource(this,'kuaishou')">🇨🇳 Kuaishou/快手</div>
-      </div>
-    </div>
-    <div style="display:flex;gap:8px">
-      <button class="btn btn-red btn-full" onclick="startBulkDownload()">⬇️ বাল্ক ডাউনলোড</button>
-      <button class="btn btn-ghost" onclick="clearUrls()">🗑 ক্লিয়ার</button>
-    </div>
-    <div style="margin-top:8px">
-      <button class="btn btn-full" style="background:#059669;color:#fff" onclick="downloadAudioToDrive()">🎵 Audio নামাও → Drive-এ Save করো</button>
-    </div>
-  </div>
-
-  <div class="card" id="queueCard" style="display:none">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-      <div class="card-title" style="margin:0">⏳ ডাউনলোড কিউ</div>
-      <button class="btn btn-sm btn-ghost" onclick="cancelDownload()">বাতিল</button>
-    </div>
-    <div class="progress-bar"><div class="progress-fill" id="dlProgress" style="width:0%"></div></div>
-    <div style="font-size:12px;color:var(--text2);margin-bottom:10px" id="dlProgressText">0/0 সম্পন্ন</div>
-    <div class="url-list" id="urlList"></div>
-    <div class="log-box" id="dlLog"></div>
-  </div>
-</div>
-
-<!-- 2. VIDEOS -->
-<div class="panel" id="panel-vid">
-  <!-- Mobile → Drive Upload -->
-  <div class="card" style="margin-bottom:10px">
-    <div class="card-title">📱 মোবাইল থেকে Drive-এ Upload</div>
-    <input type="file" accept="video/*" multiple id="mobileVideoInput" style="display:none" onchange="uploadMobileVideoToDrive(this)">
-    <button class="btn btn-green btn-full" onclick="document.getElementById('mobileVideoInput').click()">📁 ভিডিও বেছে নিন → Drive-এ যাবে</button>
-    <div id="mobileUploadLog" class="log-box" style="display:none;margin-top:8px;height:80px"></div>
-  </div>
-
-  <!-- Drive Video List -->
-  <div class="card" style="margin-bottom:10px">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-      <div class="card-title" style="margin:0">☁️ Drive-এর ভিডিও</div>
-      <button class="btn btn-sm btn-ghost" onclick="loadDriveVideos()">🔄 লোড</button>
-    </div>
-    <div id="driveVideoList"><div style="font-size:12px;color:var(--text2);text-align:center;padding:10px">লোড করতে 🔄 চাপুন</div></div>
-  </div>
-
-  <div class="filter-row" id="videoFilters">
-    <div class="chip on" onclick="setFilter(this,'all')">সব</div>
-    <div class="chip" onclick="setFilter(this,'muted')">মিউট</div>
-    <div class="chip" onclick="setFilter(this,'audio')">অডিও আছে</div>
-    <div class="chip" onclick="setFilter(this,'noaudio')">অডিও নেই</div>
-  </div>
-  <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">
-    <button class="btn btn-xs btn-ghost" onclick="selectAll()">☑ সব</button>
-    <button class="btn btn-xs btn-ghost" onclick="clearSelection()">☐ বাতিল</button>
-    <button class="btn btn-xs btn-purple" onclick="bulkAIAll()">🤖 AI সব</button>
-    <button class="btn btn-xs btn-ghost" onclick="sortVideos()">↕ সর্ট</button>
-  </div>
-  <div class="video-grid" id="videoGrid"></div>
-  <div id="emptyVideos" style="text-align:center;padding:40px;color:var(--text2)">
-    <div style="font-size:48px;margin-bottom:12px">🎬</div>
-    <div>ভিডিও নেই। আগে ডাউনলোড করুন।</div>
-  </div>
-</div>
-
-<!-- 3. AUDIO -->
-<div class="panel" id="panel-audio">
-  <!-- YT URL to Audio -->
-  <div class="card">
-    <div class="card-title">🎵 YouTube/TikTok → Audio</div>
-    <div style="font-size:12px;color:var(--text2);margin-bottom:10px">URL দিন → audio download হবে এই page-এ</div>
-    <input class="input" id="audioUrlInput" placeholder="https://youtube.com/... বা TikTok URL" style="margin-bottom:8px">
-    <button class="btn btn-full" style="background:#e11d48;color:#fff" onclick="downloadAudioFromUrl()">⬇️ Audio Download করো</button>
-    <div id="audioUrlLog" class="log-box" style="display:none;margin-top:8px;height:80px"></div>
-  </div>
-  <div class="card" style="margin-top:10px">
-    <div class="card-title">📱 মোবাইল থেকে Audio → Drive</div>
-    <div style="font-size:12px;color:var(--text2);margin-bottom:10px">যেকোনো app দিয়ে waz audio download করো → এখানে select করো → Drive Audio Folder-এ যাবে</div>
-    <input type="file" accept="audio/*" multiple id="mobileAudioInput" style="display:none" onchange="uploadMobileAudioToDrive(this)">
-    <button class="btn btn-full" style="background:#7c3aed;color:#fff" onclick="document.getElementById('mobileAudioInput').click()">🎵 Audio বেছে নিন → Drive-এ যাবে</button>
-    <div id="audioUploadLog" class="log-box" style="display:none;margin-top:8px;height:100px"></div>
-  </div>
-  <!-- Drive Audio List -->
-  <div class="card" style="margin-top:10px">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-      <div class="card-title" style="margin:0">☁️ Drive-এর Audio</div>
-      <button class="btn btn-sm btn-ghost" onclick="loadDriveAudios()">🔄 লোড</button>
-    </div>
-    <div id="driveAudioList"><div style="font-size:12px;color:var(--text2);text-align:center;padding:10px">লোড করতে 🔄 চাপুন</div></div>
-  </div>
-  <div class="sec-title">আমার অডিও লাইব্রেরি</div>
-  <div id="audioList"><div style="text-align:center;padding:30px;color:var(--text2)">অডিও নেই</div></div>
-</div>
-
-<!-- 4. AI -->
-<div class="panel" id="panel-ai">
-  <div class="card">
-    <div class="card-title">🤖 AI সার্ভিস</div>
-    <div class="chips" id="aiChips">
-      <div class="chip on" onclick="setAI(this,'gemini')">Gemini</div>
-      <div class="chip" onclick="setAI(this,'groq')">🆓 Groq</div>
-      <div class="chip" onclick="setAI(this,'grok')">Grok</div>
-      <div class="chip" onclick="setAI(this,'openai')">GPT-4</div>
-    </div>
-    <input class="input" id="aiApiKey" placeholder="API Key দিন..." style="margin-bottom:8px">
-    <button class="btn btn-ghost btn-sm" onclick="saveApiKey()">💾 সেভ</button>
-  </div>
-  <div class="card">
-    <div class="card-title">📝 প্রম্পট</div>
-    <textarea class="input" id="aiPrompt" rows="4" placeholder="ইসলামিক YouTube Shorts এর জন্য বাংলা টাইটেল, হ্যাশট্যাগ ও ট্যাগ তৈরি করো..."></textarea>
-    <button class="btn btn-purple btn-full" style="margin-top:8px" onclick="generateAI()">✨ জেনারেট করো</button>
-  </div>
-  <div id="aiResultBox" style="display:none">
-    <div class="ai-result">
-      <div class="ai-field"><div class="ai-label">টাইটেল</div><div class="ai-value" id="aiTitle"></div></div>
-      <div class="ai-field"><div class="ai-label">বিবরণ</div><div class="ai-value" id="aiDesc"></div></div>
-      <div class="ai-field"><div class="ai-label">হ্যাশট্যাগ</div><div class="tags-wrap" id="aiHashtags"></div></div>
-      <div class="ai-field"><div class="ai-label">ট্যাগ</div><div class="tags-wrap" id="aiTags"></div></div>
-      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
-        <button class="btn btn-sm btn-green" onclick="applyAIToSelected()">✅ সিলেক্টেডে লাগাও</button>
-        <button class="btn btn-sm btn-ghost" onclick="copyAIResult()">📋 কপি</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- 5. UPLOAD -->
-<div class="panel" id="panel-upload">
-  <div id="videoSelectForUpload" style="margin-bottom:12px">
-    <div class="sec-title">ভিডিও বেছে নিন</div>
-    <div style="font-size:12px;color:var(--text2)" id="uploadVideoCount">কোনো ভিডিও সিলেক্ট নেই</div>
-  </div>
-  <div class="card">
-    <div class="upload-form-field">
-      <label class="upload-form-label">টাইটেল</label>
-      <input class="input" id="upTitle" placeholder="ভিডিওর শিরোনাম">
-    </div>
-    <div class="upload-form-field">
-      <label class="upload-form-label">বিবরণ</label>
-      <textarea class="input" id="upDesc" rows="3" placeholder="ভিডিওর বিবরণ..."></textarea>
-    </div>
-    <div class="upload-form-field">
-      <label class="upload-form-label">প্রাইভেসি</label>
-      <div class="chips" id="privacyChips">
-        <div class="chip" onclick="setPrivacy(this,'public')">Public</div>
-        <div class="chip" onclick="setPrivacy(this,'unlisted')">Unlisted</div>
-        <div class="chip on" onclick="setPrivacy(this,'private')">Private</div>
-      </div>
-    </div>
-    <button class="btn btn-full" style="background:#7c3aed;color:#fff;margin-bottom:8px" onclick="generateAIForUpload()">🤖 AI দিয়ে Title/Hashtag বানাও</button>
-    <button class="btn btn-red btn-full" onclick="uploadSelected()">📤 আপলোড করো</button>
-  </div>
-  <div class="log-box" id="uploadLog" style="height:120px"></div>
-</div>
-
-<!-- 6. SCHEDULE -->
-<div class="panel" id="panel-sched">
-
-  <!-- Master Toggle -->
-  <div class="card">
-    <div style="display:flex;align-items:center;justify-content:space-between">
-      <div>
-        <div style="font-size:15px;font-weight:700">⏰ অটো শিডিউলার</div>
-        <div style="font-size:12px;color:var(--text2);margin-top:2px" id="schedStatusText">বন্ধ আছে</div>
-      </div>
-      <button class="toggle" id="schedMasterToggle" onclick="toggleMasterSched(this)"></button>
-    </div>
-  </div>
-
-  <!-- Drive Settings -->
-  <div class="card">
-    <div class="card-title">📁 Google Drive সোর্স</div>
-
-    <!-- Source Type -->
-    <div style="margin-bottom:12px">
-      <label class="upload-form-label">সোর্স টাইপ</label>
-      <div class="chips" id="schedSourceChips">
-        <div class="chip on" onclick="setSchedSource(this,'folder')">📁 Video Folder</div>
-        <div class="chip" onclick="setSchedSource(this,'zip')">🗜 ZIP ফাইল</div>
-      </div>
-    </div>
-
-    <!-- Folder mode -->
-    <div id="schedFolderMode">
-      <div style="margin-bottom:8px">
-        <label class="upload-form-label">📹 ভিডিও Folder ID</label>
-        <input class="input" id="schedFolderId" placeholder="ভিডিও ফোল্ডারের ID" onblur="saveSched()">
-        <div style="font-size:11px;color:var(--text2);margin-top:4px">drive.google.com/drive/folders/<b>এই অংশটুকু</b></div>
-      </div>
-    </div>
-
-    <!-- ZIP mode -->
-    <div id="schedZipMode" style="display:none">
-      <div style="margin-bottom:8px">
-        <label class="upload-form-label">🗜 ZIP File ID (Drive-এ)</label>
-        <input class="input" id="schedZipFileId" placeholder="ZIP ফাইলের ID">
-        <div style="font-size:11px;color:var(--text2);margin-top:4px">ZIP-এ সব video রাখো → Drive-এ upload করো → এর ID দাও</div>
-      </div>
-    </div>
-
-    <div style="margin-bottom:8px">
-      <label class="upload-form-label">🎵 অডিও Folder ID (র‍্যান্ডম নেবে)</label>
-      <input class="input" id="schedAudioFolderId" placeholder="অডিও ফোল্ডারের ID (ঐচ্ছিক)" onblur="saveSched()">
-    </div>
-    <div style="margin-bottom:8px" id="schedMaxVidsRow">
-      <label class="upload-form-label">প্রতিবার সর্বোচ্চ কতটি ভিডিও</label>
-      <input class="input" type="number" id="schedMaxVids" value="3" min="1" max="20">
-    </div>
-    <div style="margin-bottom:8px">
-      <label class="upload-form-label">YouTube Privacy</label>
-      <select class="input" id="schedPrivacy">
-        <option value="private">🔒 Private</option>
-        <option value="public">🌍 Public</option>
-        <option value="unlisted">🔗 Unlisted</option>
-      </select>
-    </div>
-    <div class="setting-row" style="padding:8px 0">
-      <div><div class="setting-label" style="font-size:13px">আপলোডের পর Drive থেকে ডিলিট</div></div>
-      <button class="toggle on" id="schedDeleteToggle" onclick="this.classList.toggle('on')"></button>
-    </div>
-    <div class="setting-row" style="padding:8px 0">
-      <div><div class="setting-label" style="font-size:13px">AI মেটা অটো জেনারেট</div></div>
-      <button class="toggle on" id="schedAIToggle" onclick="this.classList.toggle('on')"></button>
-    </div>
-  </div>
-
-  <!-- Days -->
-  <div class="card">
-    <div class="card-title">📅 সাপ্তাহিক দিন</div>
-    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:5px" id="schedDays">
-      <div class="dbtn on" data-d="0">রবি</div>
-      <div class="dbtn on" data-d="1">সোম</div>
-      <div class="dbtn on" data-d="2">মঙ্গল</div>
-      <div class="dbtn on" data-d="3">বুধ</div>
-      <div class="dbtn on" data-d="4">বৃহ</div>
-      <div class="dbtn on" data-d="5">শুক্র</div>
-      <div class="dbtn on" data-d="6">শনি</div>
-    </div>
-  </div>
-
-  <!-- Time Slots -->
-  <div class="card">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-      <div class="card-title" style="margin:0">🕐 সময় স্লট</div>
-      <button class="btn btn-sm btn-purple" onclick="addTimeSlot()">+ যোগ করুন</button>
-    </div>
-    <div id="timeSlotList"></div>
-    <div id="noSlots" style="text-align:center;padding:16px;color:var(--text2);font-size:13px">কোনো সময় নেই। যোগ করুন।</div>
-  </div>
-
-  <!-- Manual Run -->
-  <div class="card">
-    <div class="card-title">▶ এখনই চালাও</div>
-    <div style="font-size:12px;color:var(--text2);margin-bottom:10px">শিডিউল ছাড়াই এখনই Drive থেকে আপলোড শুরু করো</div>
-    <button class="btn btn-red btn-full" onclick="runNow()">🚀 এখনই আপলোড করো</button>
-  </div>
-
-  <!-- Log -->
-  <div class="card">
-    <div class="card-title">📊 আপলোড লগ</div>
-    <div class="log-box" id="schedLog" style="height:150px"></div>
-  </div>
-</div>
-
-<!-- 7. SETTINGS -->
-<div class="panel" id="panel-settings">
-  <!-- Backend -->
-  <div class="card">
-    <div class="card-title">🔧 Backend URL</div>
-    <input class="input" id="backendUrl" placeholder="https://your-app.up.railway.app">
-    <button class="btn btn-green btn-full" style="margin-top:8px" onclick="saveBackend()">💾 সেভ</button>
-  </div>
-  <!-- YouTube -->
-  <div class="connect-card" id="ytCard">
-    <div class="connect-icon">▶️</div>
-    <div class="connect-info">
-      <div class="connect-title">YouTube</div>
-      <div class="connect-sub" id="ytStatus">সংযুক্ত নয়</div>
-    </div>
-    <button class="btn btn-sm btn-red" id="ytBtn" onclick="connectYouTube()">Connect</button>
-  </div>
-  <!-- Drive -->
-  <div class="connect-card" id="driveCard">
-    <div class="connect-icon">📁</div>
-    <div class="connect-info">
-      <div class="connect-title">Google Drive</div>
-      <div class="connect-sub" id="driveStatus">সংযুক্ত নয়</div>
-    </div>
-    <button class="btn btn-sm btn-blue" id="driveBtn" onclick="connectDrive()">Connect</button>
-  </div>
-  <!-- OAuth Keys -->
-  <div class="card">
-    <div class="card-title">🔑 Google OAuth</div>
-    <div style="margin-bottom:8px">
-      <label class="upload-form-label">Client ID</label>
-      <input class="input" id="ytClientId" placeholder="xxx.apps.googleusercontent.com">
-    </div>
-    <div style="margin-bottom:8px">
-      <label class="upload-form-label">Client Secret</label>
-      <input class="input" id="ytClientSecret" placeholder="GOCSPX-...">
-    </div>
-    <button class="btn btn-ghost btn-sm" onclick="saveOAuth()">💾 সেভ</button>
-  </div>
-  <!-- AI Keys -->
-  <div class="card">
-    <div class="card-title">🤖 AI Keys</div>
-    <div style="margin-bottom:8px">
-      <label class="upload-form-label">🆓 Groq API Key (Free — console.groq.com)</label>
-      <input class="input" id="groqKey" placeholder="gsk_...">
-    </div>
-    <div style="margin-bottom:8px">
-      <label class="upload-form-label">Gemini API Key</label>
-      <input class="input" id="geminiKey" placeholder="AIza...">
-    </div>
-    <div style="margin-bottom:8px">
-      <label class="upload-form-label">Grok API Key (xAI)</label>
-      <input class="input" id="grokKey" placeholder="xai-...">
-    </div>
-    <div style="margin-bottom:8px">
-      <label class="upload-form-label">OpenAI API Key</label>
-      <input class="input" id="openaiKey" placeholder="sk-...">
-    </div>
-    <button class="btn btn-ghost btn-sm" onclick="saveAIKeys()">💾 সেভ</button>
-  </div>
-  <!-- Preferences -->
-  <div class="card">
-    <div class="card-title">⚙️ পছন্দ</div>
-    <div class="setting-row">
-      <div><div class="setting-label">অটো মিউট</div><div class="setting-sub">ডাউনলোডে অটো মিউট</div></div>
-      <button class="toggle on" id="autoMuteToggle" onclick="this.classList.toggle('on');savePref()"></button>
-    </div>
-    <div class="setting-row">
-      <div><div class="setting-label">অটো AI মেটা</div><div class="setting-sub">ডাউনলোড শেষে AI মেটা</div></div>
-      <button class="toggle" id="autoAIToggle" onclick="this.classList.toggle('on');savePref()"></button>
-    </div>
-    <div class="setting-row">
-      <div><div class="setting-label">আপলোডে ডিলিট</div><div class="setting-sub">আপলোডের পর ফাইল মুছবে</div></div>
-      <button class="toggle" id="deleteAfterToggle" onclick="this.classList.toggle('on');savePref()"></button>
-    </div>
-  </div>
-</div>
-
-<!-- BOTTOM NAV -->
-<div class="bottom-nav">
-  <div class="nav-item active" onclick="switchTab('dl',this)"><span class="icon">⬇️</span>ডাউনলোড</div>
-  <div class="nav-item" onclick="switchTab('vid',this)"><span class="icon">🎬</span>ভিডিও</div>
-  <div class="nav-item" onclick="switchTab('audio',this)"><span class="icon">🎵</span>অডিও</div>
-  <div class="nav-item" onclick="switchTab('ai',this)"><span class="icon">🤖</span>AI</div>
-  <div class="nav-item" onclick="switchTab('upload',this)"><span class="icon">📤</span>আপলোড</div>
-  <div class="nav-item" onclick="switchTab('sched',this)"><span class="icon">⏰</span>শিডিউল</div>
-  <div class="nav-item" onclick="switchTab('settings',this)"><span class="icon">⚙️</span>সেটিংস</div>
-</div>
-
-<!-- AUDIO MODAL -->
-<div class="modal-overlay" id="audioModal">
-  <div class="modal-box">
-    <div class="modal-handle"></div>
-    <div class="modal-title">🎵 অডিও বেছে নিন</div>
-    <div id="audioModalList"></div>
-    <div style="display:flex;gap:8px;margin-top:12px">
-      <button class="btn btn-purple btn-full" onclick="applyAudio()">✅ লাগাও</button>
-      <button class="btn btn-ghost" onclick="closeModal('audioModal')">বাতিল</button>
-    </div>
-  </div>
-</div>
-
-<!-- FULLSCREEN PREVIEW -->
-<div class="preview-overlay" id="previewOverlay">
-  <div class="preview-top">
-    <button class="preview-close" onclick="closePreview()">✕</button>
-    <div class="preview-top-title" id="previewTopTitle"></div>
-  </div>
-  <div class="preview-video-wrap">
-    <video id="previewVideo" controls playsinline autoplay style="width:100%;height:100%;object-fit:contain"></video>
-  </div>
-  <div class="preview-bottom">
-    <div class="preview-title" id="previewBotTitle"></div>
-    <div class="preview-sub" id="previewBotSub"></div>
-    <div class="preview-actions">
-      <button class="btn btn-sm btn-purple" id="previewAudioBtn">🎵 অডিও</button>
-      <button class="btn btn-sm btn-ghost" id="previewAIBtn">✨ AI মেটা</button>
-      <button class="btn btn-sm btn-red" id="previewUploadBtn">📤 আপলোড</button>
-    </div>
-  </div>
-</div>
-
-<script>
-// ========== STATE ==========
-const S = {
-  videos: [],
-  audios: [],
-  selected: new Set(),
-  quality: 'best',
-  aiService: 'gemini',
-  aiResult: null,
-  privacy: 'private',
-  audioModalTarget: null,
-  audioModalSelected: null,
-  downloading: false,
-};
-
-// ========== SETTINGS ==========
-function gs() { try { return JSON.parse(localStorage.getItem('yta_settings') || '{}'); } catch { return {}; } }
-function ss(obj) { localStorage.setItem('yta_settings', JSON.stringify({ ...gs(), ...obj })); }
-function getBackend() { return (gs().backendUrl || '').replace(/\/$/, ''); }
-
-// ========== INIT ==========
-window.addEventListener('DOMContentLoaded', () => {
-  loadVideos();
-  loadAudios();
-  loadSettings();
-  renderVideos();
-  renderAudios();
-  checkConnection();
-  initSched();
+// Explicit root route
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-function loadSettings() {
-  const s = gs();
-  if (s.backendUrl) document.getElementById('backendUrl').value = s.backendUrl;
-  if (s.ytClientId) document.getElementById('ytClientId').value = s.ytClientId;
-  if (s.ytClientSecret) document.getElementById('ytClientSecret').value = s.ytClientSecret;
-  if (s.geminiKey) document.getElementById('geminiKey').value = s.geminiKey;
-  if (s.groqKey) document.getElementById('groqKey').value = s.groqKey;
-  if (s.grokKey) document.getElementById('grokKey').value = s.grokKey;
-  if (s.openaiKey) document.getElementById('openaiKey').value = s.openaiKey;
-  if (s.autoMute === false) document.getElementById('autoMuteToggle').classList.remove('on');
-  if (s.autoAI) document.getElementById('autoAIToggle').classList.add('on');
-  if (s.deleteAfter) document.getElementById('deleteAfterToggle').classList.add('on');
-  // Load AI key for current service
-  const lastSvc = s.lastAIService || 'gemini';
-  S.aiService = lastSvc;
-  const keyMap = { gemini: s.geminiKey, groq: s.groqKey, grok: s.grokKey, openai: s.openaiKey };
-  if (keyMap[lastSvc]) document.getElementById('aiApiKey').value = keyMap[lastSvc] || '';
-  // Set active chip
-  document.querySelectorAll('#aiChips .chip').forEach(c => {
-    const svc = c.getAttribute('onclick')?.match(/'(\w+)'/)?.[1];
-    if (svc === lastSvc) c.classList.add('on'); else c.classList.remove('on');
-  });
-}
-
-// ========== TABS ==========
-function switchTab(tab, el) {
-  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-  document.getElementById('panel-' + (tab === 'vid' ? 'vid' : tab === 'audio' ? 'audio' : tab === 'ai' ? 'ai' : tab === 'upload' ? 'upload' : tab === 'sched' ? 'sched' : tab === 'settings' ? 'settings' : 'dl')).classList.add('active');
-  el.classList.add('active');
-  if (tab === 'vid') renderVideos();
-  if (tab === 'upload') updateUploadCount();
-}
-
-// ========== CONNECTION ==========
-async function checkConnection() {
-  const backend = getBackend();
-  if (!backend) { setConn(false, 'Backend নেই'); return; }
-  try {
-    const r = await fetch(backend + '/health');
-    if (r.ok) {
-      setConn(true, 'Connected');
-      checkAuthStatus();
-    } else setConn(false, 'Error');
-  } catch { setConn(false, 'Offline'); }
-}
-
-function setConn(ok, txt) {
-  document.getElementById('connDot').className = 'conn-dot' + (ok ? ' active' : '');
-  document.getElementById('connText').textContent = txt;
-}
-
-async function checkAuthStatus() {
-  try {
-    const r = await fetch(getBackend() + '/api/status');
-    const d = await r.json();
-    if (d.youtube) {
-      document.getElementById('ytStatus').textContent = '✅ ' + (d.ytChannel || 'সংযুক্ত');
-      document.getElementById('ytStatus').className = 'connect-sub ok';
-      document.getElementById('ytBtn').textContent = '✓ সংযুক্ত';
-      document.getElementById('ytBtn').className = 'btn btn-sm btn-green';
-      document.getElementById('ytCard').classList.add('connected');
-    }
-    if (d.drive) {
-      document.getElementById('driveStatus').textContent = '✅ সংযুক্ত';
-      document.getElementById('driveStatus').className = 'connect-sub ok';
-      document.getElementById('driveBtn').textContent = '✓ সংযুক্ত';
-      document.getElementById('driveBtn').className = 'btn btn-sm btn-green';
-      document.getElementById('driveCard').classList.add('connected');
-    }
-  } catch {}
-}
+app.get('/api/job/:jobId', (req, res) => {
+  const job = jobs[req.params.jobId];
+  if (!job) return res.status(404).json({ error: 'Job not found' });
+  res.json(job);
+});
 
 // ========== DOWNLOAD ==========
-function setQuality(el, q) {
-  S.quality = q;
-  document.querySelectorAll('#qualityChips .chip').forEach(c => c.classList.remove('on'));
-  el.classList.add('on');
-}
+app.post('/api/download', async (req, res) => {
+  const { url, quality = 'best', mute = true, audioOnly = false } = req.body;
+  if (!url) return res.status(400).json({ error: 'URL required' });
 
-function setSource(el, src) {
-  S.source = src;
-  document.querySelectorAll('#sourceChips .chip').forEach(c => c.classList.remove('on'));
-  el.classList.add('on');
-}
+  const jobId = createJob();
+  res.json({ jobId, status: 'processing' });
 
-function clearUrls() { document.getElementById('urlInput').value = ''; }
-
-// ========== Drive Video & Audio List ==========
-async function loadDriveVideos() {
-  const s = gs();
-  const folderId = s.schedFolderId;
-  if (!folderId) { toast('শিডিউল ট্যাবে Video Folder ID দিন!'); return; }
-  const box = document.getElementById('driveVideoList');
-  box.innerHTML = '<div style="font-size:12px;color:var(--text2);text-align:center;padding:10px">⏳ লোড হচ্ছে...</div>';
-  try {
-    const res = await fetch(getBackend() + '/api/drive/list?folderId=' + folderId);
-    const data = await res.json();
-    const files = (data.files || []).filter(f => f.mimeType?.includes('video') || f.name?.match(/\.(mp4|mov|avi|mkv|webm)$/i));
-    if (!files.length) { box.innerHTML = '<div style="font-size:12px;color:var(--text2);text-align:center;padding:10px">Drive-এ কোনো ভিডিও নেই</div>'; return; }
-    box.innerHTML = files.map(f => `
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 4px;border-bottom:1px solid var(--border)">
-        <div style="font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">🎬 ${f.name}</div>
-        <button class="btn btn-xs btn-ghost" style="color:#ef4444;margin-left:6px" onclick="deleteDriveFile('${f.id}','${f.name}','video')">🗑</button>
-      </div>`).join('');
-    box.innerHTML += `<div style="font-size:11px;color:var(--text2);text-align:right;padding-top:4px">${files.length}টি ভিডিও</div>`;
-  } catch(e) { box.innerHTML = '<div style="font-size:12px;color:#ef4444;padding:10px">❌ ' + e.message + '</div>'; }
-}
-
-async function loadDriveAudios() {
-  const s = gs();
-  const folderId = s.schedAudioFolderId;
-  if (!folderId) { toast('শিডিউল ট্যাবে Audio Folder ID দিন!'); return; }
-  const box = document.getElementById('driveAudioList');
-  box.innerHTML = '<div style="font-size:12px;color:var(--text2);text-align:center;padding:10px">⏳ লোড হচ্ছে...</div>';
-  try {
-    const res = await fetch(getBackend() + '/api/drive/list?folderId=' + folderId);
-    const data = await res.json();
-    const files = (data.files || []).filter(f => f.name?.match(/\.(mp3|m4a|wav|aac|ogg|opus)$/i) || f.mimeType?.includes('audio'));
-    if (!files.length) { box.innerHTML = '<div style="font-size:12px;color:var(--text2);text-align:center;padding:10px">Drive-এ কোনো audio নেই</div>'; return; }
-    box.innerHTML = files.map(f => `
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 4px;border-bottom:1px solid var(--border)">
-        <div style="font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">🎵 ${f.name}</div>
-        <button class="btn btn-xs btn-ghost" style="color:#ef4444;margin-left:6px" onclick="deleteDriveFile('${f.id}','${f.name}','audio')">🗑</button>
-      </div>`).join('');
-    box.innerHTML += `<div style="font-size:11px;color:var(--text2);text-align:right;padding-top:4px">${files.length}টি audio</div>`;
-  } catch(e) { box.innerHTML = '<div style="font-size:12px;color:#ef4444;padding:10px">❌ ' + e.message + '</div>'; }
-}
-
-async function deleteDriveFile(fileId, fileName, type) {
-  if (!confirm(`"${fileName}" Drive থেকে মুছবো?`)) return;
-  try {
-    const res = await fetch(getBackend() + '/api/drive/delete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fileId })
-    });
-    const data = await res.json();
-    if (!data.success) throw new Error(data.error);
-    toast('✅ মুছে গেছে!');
-    if (type === 'video') loadDriveVideos();
-    else loadDriveAudios();
-  } catch(e) { toast('❌ ' + e.message); }
-}
-
-
-async function uploadMobileAudioToDrive(input) {
-  const files = Array.from(input.files);
-  if (!files.length) return;
-
-  const s = gs();
-  const folderId = s.schedAudioFolderId || document.getElementById('schedAudioFolderId')?.value?.trim();
-  if (!folderId) { toast('শিডিউল ট্যাবে Audio Folder ID দিন!'); return; }
-
-  const logBox = document.getElementById('audioUploadLog');
-  logBox.style.display = 'block';
-  logBox.innerHTML = '';
-  const log = (msg) => { logBox.innerHTML += msg + '<br>'; logBox.scrollTop = logBox.scrollHeight; };
-
-  // Get Drive token
-  let driveToken;
-  try {
-    const tr = await fetch(getBackend() + '/api/drive/token');
-    const td = await tr.json();
-    if (!td.token) throw new Error('Drive সংযুক্ত নয়');
-    driveToken = td.token;
-  } catch(e) { log('❌ ' + e.message); return; }
-
-  log(`🎵 ${files.length}টি audio পাওয়া গেছে...`);
-
-  for (let i = 0; i < files.length; i++) {
-    const file = files[i];
-    log(`⬆️ (${i+1}/${files.length}) ${file.name}...`);
+  (async () => {
     try {
-      // Resumable upload directly to Drive
-      const meta = JSON.stringify({ name: file.name, parents: [folderId] });
-      const initRes = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${driveToken}`,
-          'Content-Type': 'application/json',
-          'X-Upload-Content-Type': file.type || 'audio/mpeg',
-          'X-Upload-Content-Length': file.size
-        },
-        body: meta
-      });
-      if (!initRes.ok) throw new Error('Init failed: ' + initRes.status);
-      const uploadUrl = initRes.headers.get('location');
-
-      const upRes = await fetch(uploadUrl, {
-        method: 'PUT',
-        headers: { 'Content-Type': file.type || 'audio/mpeg', 'Content-Length': file.size },
-        body: file
-      });
-      if (!upRes.ok) throw new Error('Upload failed: ' + upRes.status);
-      log(`✅ ${file.name} → Drive Audio Folder!`);
-    } catch(e) {
-      log(`❌ ${file.name}: ${e.message}`);
-    }
-  }
-  log('🎉 সব শেষ!');
-  input.value = '';
-}
-
-
-async function uploadMobileVideoToDrive(input) {
-  const files = Array.from(input.files);
-  if (!files.length) return;
-
-  const s = gs();
-  const folderId = s.schedFolderId || document.getElementById('schedFolderId')?.value?.trim();
-  if (!folderId) { toast('শিডিউল ট্যাবে Video Folder ID দিন!'); return; }
-
-  const logBox = document.getElementById('mobileUploadLog');
-  logBox.style.display = 'block';
-  logBox.innerHTML = '';
-  const log = (msg) => { logBox.innerHTML += msg + '<br>'; logBox.scrollTop = logBox.scrollHeight; };
-
-  // Get Drive token from server
-  let driveToken;
-  try {
-    const tr = await fetch(getBackend() + '/api/drive/token');
-    const td = await tr.json();
-    if (!td.token) throw new Error('Drive সংযুক্ত নয়');
-    driveToken = td.token;
-  } catch(e) { log('❌ ' + e.message); return; }
-
-  log(`📁 ${files.length}টি ভিডিও পাওয়া গেছে...`);
-
-  for (let i = 0; i < files.length; i++) {
-    const file = files[i];
-    log(`⬆️ (${i+1}/${files.length}) ${file.name}...`);
-
-    try {
-      // Step 1: Initiate resumable upload
-      const meta = JSON.stringify({ name: file.name, parents: [folderId] });
-      const initRes = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${driveToken}`,
-          'Content-Type': 'application/json',
-          'X-Upload-Content-Type': file.type || 'video/mp4',
-          'X-Upload-Content-Length': file.size
-        },
-        body: meta
-      });
-      if (!initRes.ok) throw new Error('Upload init failed: ' + initRes.status);
-      const uploadUrl = initRes.headers.get('location');
-
-      // Step 2: Upload file directly
-      const upRes = await fetch(uploadUrl, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': file.type || 'video/mp4',
-          'Content-Length': file.size
-        },
-        body: file
-      });
-      if (!upRes.ok) throw new Error('Upload failed: ' + upRes.status);
-      const data = await upRes.json();
-      log(`✅ ${file.name} → Drive! (ID: ${data.id?.substring(0,10)}...)`);
-    } catch(e) {
-      log(`❌ ${file.name}: ${e.message}`);
-    }
-  }
-  log('🎉 সব শেষ!');
-  input.value = '';
-}
-
-async function downloadAudioToDrive() {
-  const url = document.getElementById('urlInput').value.trim().split('\n')[0].trim();
-  if (!url) { toast('URL দিন!'); return; }
-  const s = gs();
-  const audioFolderId = s.schedAudioFolderId || document.getElementById('schedAudioFolderId')?.value?.trim();
-  if (!audioFolderId) { toast('শিডিউল ট্যাবে Audio Folder ID দিন!'); return; }
-
-  const logBox = document.getElementById('dlLog');
-  document.getElementById('queueCard').style.display = 'block';
-  logBox.innerHTML = '';
-
-  const log = (msg) => { logBox.innerHTML += msg + '<br>'; logBox.scrollTop = logBox.scrollHeight; };
-
-  log('🎵 Audio download শুরু হচ্ছে...');
-
-  try {
-    // Step 1: Download audio
-    const dlRes = await fetch(getBackend() + '/api/download', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, quality: 'best', audioOnly: true })
-    });
-    const { jobId } = await dlRes.json();
-    log('⏳ Download হচ্ছে...');
-
-    // Wait for download
-    let filePath = null, fileName = null;
-    for (let i = 0; i < 120; i++) {
-      await new Promise(r => setTimeout(r, 3000));
-      const jr = await fetch(getBackend() + '/api/job/' + jobId);
-      const job = await jr.json();
-      if (job.status === 'done') {
-        filePath = job.result?.filepath || job.result?.audioPath;
-        fileName = job.result?.filename || job.result?.title || 'audio';
-        log('✅ Download সম্পন্ন: ' + fileName);
-        break;
-      }
-      if (job.status === 'error') throw new Error(job.error);
-    }
-    if (!filePath) throw new Error('Download timeout');
-
-    // Step 2: Upload to Drive Audio Folder
-    log('☁️ Drive Audio Folder-এ upload হচ্ছে...');
-    const upRes = await fetch(getBackend() + '/api/drive/save-audio', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filePath, fileName, audioFolderId })
-    });
-    const upData = await upRes.json();
-    if (!upData.success) throw new Error(upData.error || 'Upload failed');
-
-    log('🎉 Drive-এ Save হয়েছে! ফাইল: ' + upData.fileName);
-    toast('✅ Audio Drive-এ Save হয়েছে!', 3000);
-
-  } catch(e) {
-    log('❌ Error: ' + e.message);
-    toast('❌ ' + e.message);
-  }
-}
-
-async function startBulkDownload() {
-  const raw = document.getElementById('urlInput').value.trim();
-  if (!raw) { toast('URL দিন!'); return; }
-  const backend = getBackend();
-  if (!backend) { toast('Settings-এ Backend URL দিন!'); return; }
-
-  const urls = raw.split('\n').map(u => u.trim()).filter(u => u.startsWith('http'));
-  if (!urls.length) { toast('কোনো valid URL নেই!'); return; }
-
-  S.downloading = true;
-  document.getElementById('queueCard').style.display = 'block';
-
-  const items = urls.map(url => ({ url, status: 'pending', id: Date.now() + Math.random() }));
-  renderQueue(items);
-  dlLog('📋 ' + urls.length + 'টি URL পেয়েছি');
-
-  let done = 0;
-  for (const item of items) {
-    if (!S.downloading) break;
-    item.status = 'downloading';
-    renderQueue(items);
-    dlLog('⬇️ ' + item.url.substring(0, 50) + '...');
-
-    try {
-      let jobId;
-
-      if (S.source === 'kuaishou') {
-        // Kuaishou API
-        const r = await fetch(backend + '/api/kuaishou/download', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: item.url, mute: gs().autoMute !== false })
-        });
-        if (!r.ok) throw new Error(await r.text());
-        jobId = (await r.json()).jobId;
-      } else {
-        // TikTok/YouTube via yt-dlp
-        const r = await fetch(backend + '/api/download', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: item.url, quality: S.quality, mute: gs().autoMute !== false })
-        });
-        if (!r.ok) throw new Error(await r.text());
-        jobId = (await r.json()).jobId;
-      }
-
-      // Poll job
-      const data = await pollJob(jobId);
-      item.status = 'done';
-
-      const vid = {
-        id: String(item.id),
-        title: data.title || 'ভিডিও ' + (S.videos.length + 1),
-        url: item.url,
-        filename: data.filename,
-        filepath: data.filepath,
-        thumbnail: data.thumbnail ? (backend + data.thumbnail) : null,
-        duration: data.duration,
-        size: data.size,
-        muted: true,
-        audioId: null,
-        audioPath: null,
-        meta: null
-      };
-      S.videos.push(vid);
-      dlLog('✅ ' + (data.title || 'ভিডিও'));
-
-      if (gs().autoAI) autoMeta(vid).catch(() => {});
-
-    } catch (err) {
-      item.status = 'error';
-      dlLog('✗ ত্রুটি: ' + err.message, true);
-    }
-
-    done++;
-    renderQueue(items);
-    document.getElementById('dlProgress').style.width = (done / items.length * 100) + '%';
-    document.getElementById('dlProgressText').textContent = done + '/' + items.length + ' সম্পন্ন';
-    saveVideos();
-    await sleep(500);
-  }
-
-  S.downloading = false;
-  toast('✅ ' + done + 'টি ডাউনলোড সম্পন্ন');
-  renderVideos();
-}
-
-async function pollJob(jobId) {
-  const backend = getBackend();
-  const maxMs = 5 * 60 * 1000;
-  const interval = 3000;
-  let elapsed = 0;
-  while (elapsed < maxMs) {
-    await sleep(interval);
-    elapsed += interval;
-    try {
-      const r = await fetch(backend + '/api/job/' + jobId);
-      const job = await r.json();
-      if (job.status === 'done') return job.result;
-      if (job.status === 'error') throw new Error(job.error);
-      document.getElementById('dlProgressText').textContent = 'ডাউনলোড হচ্ছে... ' + Math.floor(elapsed / 1000) + 's';
-    } catch (e) { if (e.message !== 'Failed to fetch') throw e; }
-  }
-  throw new Error('Timeout');
-}
-
-function cancelDownload() { S.downloading = false; toast('বাতিল করা হয়েছে'); }
-
-function renderQueue(items) {
-  const list = document.getElementById('urlList');
-  list.innerHTML = items.map(it => `
-    <div class="url-item">
-      <span class="url-text">${it.url}</span>
-      <span class="url-badge ${it.status === 'done' ? 'badge-done' : it.status === 'error' ? 'badge-err' : it.status === 'downloading' ? 'badge-dl' : 'badge-wait'}">
-        ${it.status === 'done' ? '✓ হয়েছে' : it.status === 'error' ? '✗ ত্রুটি' : it.status === 'downloading' ? '⬇️' : 'অপেক্ষায়'}
-      </span>
-    </div>`).join('');
-}
-
-function dlLog(msg, err) {
-  const box = document.getElementById('dlLog');
-  const d = document.createElement('div');
-  d.textContent = '[' + new Date().toLocaleTimeString('bn') + '] ' + msg;
-  if (err) d.className = 'log-err';
-  box.appendChild(d);
-  box.scrollTop = box.scrollHeight;
-}
-
-// ========== VIDEOS ==========
-let videoFilter = 'all';
-
-function setFilter(el, f) {
-  videoFilter = f;
-  document.querySelectorAll('#videoFilters .chip').forEach(c => c.classList.remove('on'));
-  el.classList.add('on');
-  renderVideos();
-}
-
-function renderVideos() {
-  const grid = document.getElementById('videoGrid');
-  const empty = document.getElementById('emptyVideos');
-  let vids = S.videos;
-  if (videoFilter === 'muted') vids = vids.filter(v => v.muted);
-  if (videoFilter === 'audio') vids = vids.filter(v => v.audioId);
-  if (videoFilter === 'noaudio') vids = vids.filter(v => !v.audioId);
-
-  if (!vids.length) { grid.innerHTML = ''; empty.style.display = 'block'; updateBulkBar(); return; }
-  empty.style.display = 'none';
-
-  grid.innerHTML = vids.map(v => {
-    const audioName = v.audioId ? (S.audios.find(a => a.id === v.audioId)?.name?.substring(0, 12) || '') : '';
-    const sel = S.selected.has(v.id);
-    return `
-    <div class="video-card ${sel ? 'selected' : ''}" id="vc_${v.id}">
-      <div class="v-thumb" onclick="toggleSelect('${v.id}')">
-        ${v.thumbnail ? `<img src="${v.thumbnail}" onerror="this.style.display='none'">` : '<div class="v-thumb-icon">🎬</div>'}
-        ${v.muted ? '<div class="v-badge">🔇 MUTED</div>' : ''}
-        ${audioName ? `<div class="v-audio-badge">🎵 ${audioName}</div>` : ''}
-        ${v.duration ? `<div class="v-dur">${v.duration}</div>` : ''}
-        ${sel ? '<div class="v-sel">✓</div>' : ''}
-        <div class="v-play-btn" onclick="event.stopPropagation();openPreview('${v.id}')">▶</div>
-      </div>
-      <div class="v-info" onclick="toggleSelect('${v.id}')">
-        <div class="v-title">${v.meta?.title || v.title || 'ভিডিও'}</div>
-        <div class="v-meta">
-          <span>${v.size || '?'}</span>
-          ${v.meta ? '<span style="color:var(--accent2)">✨AI</span>' : ''}
-        </div>
-      </div>
-      <div class="v-actions">
-        <button class="btn btn-xs btn-purple" onclick="openAudioModal('${v.id}')">🎵</button>
-        <button class="btn btn-xs btn-ghost" onclick="singleAI('${v.id}')">✨</button>
-        <button class="btn btn-xs btn-red" onclick="uploadOne('${v.id}')">📤</button>
-        <button class="btn btn-xs btn-ghost" onclick="deleteVideo('${v.id}')">🗑</button>
-      </div>
-    </div>`;
-  }).join('');
-  updateBulkBar();
-}
-
-function toggleSelect(id) {
-  if (S.selected.has(id)) S.selected.delete(id);
-  else S.selected.add(id);
-  renderVideos();
-  updateUploadCount();
-}
-
-function selectAll() { S.videos.forEach(v => S.selected.add(v.id)); renderVideos(); updateUploadCount(); }
-function clearSelection() { S.selected.clear(); renderVideos(); updateBulkBar(); updateUploadCount(); }
-
-function updateBulkBar() {
-  const bar = document.getElementById('bulkBar');
-  if (S.selected.size > 0) {
-    bar.classList.add('show');
-    document.getElementById('bulkText').textContent = S.selected.size + 'টি সিলেক্ট';
-  } else bar.classList.remove('show');
-}
-
-function sortVideos() { S.videos.reverse(); renderVideos(); }
-
-function deleteVideo(id) {
-  const v = S.videos.find(v => v.id === id);
-  if (!v) return;
-  if (v.filepath) fetch(getBackend() + '/api/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filepath: v.filepath }) }).catch(() => {});
-  S.videos = S.videos.filter(v => v.id !== id);
-  S.selected.delete(id);
-  saveVideos(); renderVideos();
-}
-
-function saveVideos() { try { localStorage.setItem('yta_videos', JSON.stringify(S.videos.map(v => ({ ...v, thumbnail: null })))); } catch {} }
-function loadVideos() { try { const d = localStorage.getItem('yta_videos'); if (d) S.videos = JSON.parse(d); } catch {} }
-
-// ========== PREVIEW ==========
-function openPreview(id) {
-  const v = S.videos.find(v => v.id === id);
-  if (!v) return;
-  const backend = getBackend();
-  const vid = document.getElementById('previewVideo');
-  vid.src = backend + '/api/stream?file=' + encodeURIComponent(v.filename || '');
-  vid.load(); vid.play().catch(() => {});
-  const title = v.meta?.title || v.title || 'ভিডিও';
-  document.getElementById('previewTopTitle').textContent = title;
-  document.getElementById('previewBotTitle').textContent = title;
-  document.getElementById('previewBotSub').textContent = (v.size || '') + (v.duration ? ' · ' + v.duration : '') + (v.muted ? ' · 🔇' : '');
-  document.getElementById('previewAudioBtn').onclick = () => { closePreview(); openAudioModal(id); };
-  document.getElementById('previewAIBtn').onclick = () => { closePreview(); singleAI(id); };
-  document.getElementById('previewUploadBtn').onclick = () => { closePreview(); uploadOne(id); };
-  document.getElementById('previewOverlay').classList.add('open');
-  document.body.style.overflow = 'hidden';
-}
-
-function closePreview() {
-  const vid = document.getElementById('previewVideo');
-  vid.pause(); vid.src = '';
-  document.getElementById('previewOverlay').classList.remove('open');
-  document.body.style.overflow = '';
-}
-
-// ========== AUDIO ==========
-function renderAudios() {
-  const list = document.getElementById('audioList');
-  if (!S.audios.length) { list.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text2)">অডিও নেই</div>'; return; }
-  list.innerHTML = S.audios.map(a => `
-    <div class="audio-item" id="ai_${a.id}">
-      <div class="audio-icon">🎵</div>
-      <div class="audio-info">
-        <div class="audio-name">${a.name}</div>
-        <div class="audio-meta">${a.size || ''} ${a.duration || ''}</div>
-      </div>
-      <button class="btn btn-xs btn-ghost" onclick="deleteAudio('${a.id}')">🗑</button>
-    </div>`).join('');
-}
-
-async function extractAudio() {
-  const url = document.getElementById('audioUrlInput').value.trim();
-  if (!url) { toast('URL দিন!'); return; }
-  const backend = getBackend();
-  if (!backend) { toast('Backend URL দিন!'); return; }
-  toast('অডিও এক্সট্রাক্ট হচ্ছে...');
-  try {
-    const r = await fetch(backend + '/api/extract-audio', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url })
-    });
-    if (!r.ok) throw new Error(await r.text());
-    const { jobId } = await r.json();
-    const data = await pollAudioJob(jobId);
-    S.audios.push({ id: String(Date.now()), name: data.title || 'অডিও', filepath: data.filepath, url: data.audioUrl, size: data.size });
-    saveAudios(); renderAudios();
-    toast('✅ অডিও যোগ হয়েছে!');
-    document.getElementById('audioUrlInput').value = '';
-  } catch (err) { toast('ত্রুটি: ' + err.message); }
-}
-
-async function pollAudioJob(jobId) {
-  const backend = getBackend();
-  for (let i = 0; i < 60; i++) {
-    await sleep(3000);
-    const r = await fetch(backend + '/api/job/' + jobId);
-    const job = await r.json();
-    if (job.status === 'done') return job.result;
-    if (job.status === 'error') throw new Error(job.error);
-  }
-  throw new Error('Timeout');
-}
-
-function loadLocalAudio(input) {
-  const file = input.files[0];
-  if (!file) return;
-  S.audios.push({ id: String(Date.now()), name: file.name, filepath: null, url: URL.createObjectURL(file), size: (file.size / 1024 / 1024).toFixed(1) + 'MB' });
-  saveAudios(); renderAudios();
-  toast('✅ ' + file.name + ' যোগ হয়েছে');
-}
-
-function deleteAudio(id) { S.audios = S.audios.filter(a => a.id !== id); saveAudios(); renderAudios(); }
-function saveAudios() { try { localStorage.setItem('yta_audios', JSON.stringify(S.audios)); } catch {} }
-function loadAudios() { try { const d = localStorage.getItem('yta_audios'); if (d) S.audios = JSON.parse(d); } catch {} }
-
-// ========== AUDIO MODAL ==========
-function openAudioModal(videoId) {
-  S.audioModalTarget = videoId;
-  const v = S.videos.find(v => v.id === videoId);
-  S.audioModalSelected = v?.audioId || null;
-  const list = document.getElementById('audioModalList');
-  if (!S.audios.length) { list.innerHTML = '<p style="color:var(--text2);text-align:center">অডিও নেই। আগে অডিও ট্যাবে যোগ করুন।</p>'; }
-  else {
-    list.innerHTML = S.audios.map(a => `
-      <div class="audio-item ${a.id === S.audioModalSelected ? 'selected' : ''}" onclick="selectModalAudio('${a.id}',this)">
-        <div class="audio-icon">🎵</div>
-        <div class="audio-info"><div class="audio-name">${a.name}</div><div class="audio-meta">${a.size || ''}</div></div>
-      </div>`).join('');
-  }
-  document.getElementById('audioModal').classList.add('open');
-}
-
-function selectModalAudio(id, el) {
-  S.audioModalSelected = id;
-  document.querySelectorAll('#audioModalList .audio-item').forEach(e => e.classList.remove('selected'));
-  el.classList.add('selected');
-}
-
-async function applyAudio() {
-  if (!S.audioModalTarget || !S.audioModalSelected) { closeModal('audioModal'); return; }
-  const v = S.videos.find(v => v.id === S.audioModalTarget);
-  const a = S.audios.find(a => a.id === S.audioModalSelected);
-  if (!v || !a) { closeModal('audioModal'); return; }
-  closeModal('audioModal');
-
-  toast('অডিও মার্জ হচ্ছে...');
-  try {
-    const r = await fetch(getBackend() + '/api/merge-audio', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ videoPath: v.filepath, audioPath: a.filepath || a.url })
-    });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error);
-    v.filepath = data.outputPath;
-    v.filename = data.filename;
-    v.audioId = S.audioModalSelected;
-    v.audioPath = a.filepath;
-    saveVideos(); renderVideos();
-    toast('✅ অডিও যোগ হয়েছে!');
-  } catch (err) { toast('মার্জ ত্রুটি: ' + err.message); }
-}
-
-function closeModal(id) { document.getElementById(id).classList.remove('open'); }
-
-// ========== AI ==========
-function setAI(el, service) {
-  S.aiService = service;
-  ss({ lastAIService: service });
-  document.querySelectorAll('#aiChips .chip').forEach(c => c.classList.remove('on'));
-  el.classList.add('on');
-  const s = gs();
-  const map = { gemini: s.geminiKey, groq: s.groqKey, grok: s.grokKey, openai: s.openaiKey };
-  document.getElementById('aiApiKey').value = map[service] || '';
-  document.getElementById('aiApiKey').placeholder = service === 'gemini' ? 'AIza...' : service === 'groq' ? 'gsk_...' : service === 'grok' ? 'xai-...' : 'sk-...';
-}
-
-function saveApiKey() {
-  const key = document.getElementById('aiApiKey').value.trim();
-  if (!key) { toast('Key দিন!'); return; }
-  ss({ [S.aiService + 'Key']: key });
-  // Also update named field
-  const fieldMap = { gemini: 'geminiKey', groq: 'groqKey', grok: 'grokKey', openai: 'openaiKey' };
-  const field = document.getElementById(fieldMap[S.aiService]);
-  if (field) field.value = key;
-  toast('💾 সেভ হয়েছে');
-}
-
-async function generateAI() {
-  const apiKey = document.getElementById('aiApiKey').value.trim() || gs()[S.aiService + 'Key'];
-  const prompt = document.getElementById('aiPrompt').value.trim();
-  if (!apiKey) { toast('API Key দিন!'); return; }
-  if (!prompt) { toast('প্রম্পট দিন!'); return; }
-  toast('AI জেনারেট হচ্ছে...');
-  try {
-    const r = await fetch(getBackend() + '/api/ai-generate', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ service: S.aiService, apiKey, prompt })
-    });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error);
-    S.aiResult = data;
-    showAIResult(data);
-  } catch (err) { toast('AI ত্রুটি: ' + err.message); }
-}
-
-function showAIResult(d) {
-  document.getElementById('aiResultBox').style.display = 'block';
-  document.getElementById('aiTitle').textContent = d.title || '';
-  document.getElementById('aiDesc').textContent = d.description || '';
-  document.getElementById('aiHashtags').innerHTML = (d.hashtags || []).map(h => `<span class="tag">${h}</span>`).join('');
-  document.getElementById('aiTags').innerHTML = (d.tags || []).map(t => `<span class="tag">${t}</span>`).join('');
-}
-
-function applyAIToSelected() {
-  if (!S.aiResult) { toast('আগে AI জেনারেট করুন'); return; }
-  S.selected.forEach(id => {
-    const v = S.videos.find(v => v.id === id);
-    if (v) v.meta = { ...S.aiResult };
-  });
-  saveVideos(); renderVideos();
-  toast('✅ ' + S.selected.size + 'টি ভিডিওতে লাগানো হয়েছে');
-}
-
-function copyAIResult() {
-  if (!S.aiResult) return;
-  navigator.clipboard?.writeText(JSON.stringify(S.aiResult, null, 2)).then(() => toast('📋 কপি হয়েছে'));
-}
-
-async function singleAI(videoId) {
-  const v = S.videos.find(v => v.id === videoId);
-  if (!v) return;
-  const s = gs();
-  const apiKey = s[S.aiService + 'Key'] || s.geminiKey || s.grokKey;
-  if (!apiKey) { toast('AI Key দিন Settings-এ!'); switchTab('ai', document.querySelectorAll('.nav-item')[3]); return; }
-  const prompt = `এই TikTok ভিডিওর জন্য YouTube Shorts metadata তৈরি করো: "${v.title}". JSON ফর্ম্যাটে দাও: {"title":"...","description":"...","hashtags":["#..."],"tags":["..."],"category":""}`;
-  toast('AI মেটা তৈরি হচ্ছে...');
-  try {
-    const r = await fetch(getBackend() + '/api/ai-generate', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ service: S.aiService, apiKey, prompt })
-    });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error);
-    v.meta = data;
-    saveVideos(); renderVideos();
-    toast('✅ AI মেটা তৈরি হয়েছে!');
-  } catch (err) { toast('AI ত্রুটি: ' + err.message); }
-}
-
-
-// ===== Upload section AI Meta =====
-async function generateAIForUpload() {
-  const s = gs();
-  const apiKey = s.groqKey || s.geminiKey || s.grokKey || s.openaiKey;
-  const service = s.groqKey ? 'groq' : s.geminiKey ? 'gemini' : s.grokKey ? 'grok' : 'openai';
-  if (!apiKey) { toast('Settings-এ AI Key দিন!'); return; }
-  const titleHint = document.getElementById('upTitle').value.trim() || 'ইসলামিক শর্টস';
-  toast('AI বানাচ্ছে...');
-  const prompt = `You are an Islamic YouTube Shorts expert for Bengali audience. Video hint: "${titleHint}". Return ONLY JSON no markdown: {"title":"বাংলা ইসলামিক টাইটেল","description":"লাইন১\nলাইন২\nলাইন৩","hashtags":["#shorts","#islamicshorts","#waz","#islamicvideo","#quran","#allah","#islam","#muslim","#bangla","#bangladesh","#viral","#islamicmotivation","#deen","#alhamdulillah","#subhanallah","#islamiccontent","#islamicquotes","#hadith","#sunnah","#namaz"],"tags":["islamic shorts","bangla waz","islamic motivation","quran","allah","muslim","bangladesh","viral islamic","waz mahfil","islamic video bangla","deen","hadith","sunnah","islamic quotes","bangla islamic video","ওয়াজ","ইসলামিক শর্টস","বাংলা ওয়াজ","ইসলামিক মোটিভেশন","quran recitation","islamic reminder","allah akbar","subhanallah","alhamdulillah","short islamic video"]}`;
-  try {
-    const r = await fetch(getBackend() + '/api/ai-generate', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ service, apiKey, prompt })
-    });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error);
-    if (data.title) document.getElementById('upTitle').value = data.title;
-    const desc = (data.description || '') + '\n\n' + (data.hashtags || []).join(' ');
-    if (desc.trim()) document.getElementById('upDesc').value = desc.trim();
-    toast('AI meta fill হয়েছে!');
-  } catch(e) { toast('AI ত্রুটি: ' + e.message); }
-}
-
-// ===== Audio URL Download =====
-async function downloadAudioFromUrl() {
-  const url = document.getElementById('audioUrlInput').value.trim();
-  if (!url) { toast('URL দিন!'); return; }
-  const log = document.getElementById('audioUrlLog');
-  log.style.display = 'block';
-  log.textContent = 'Download হচ্ছে...';
-  try {
-    const r = await fetch(getBackend() + '/api/download', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, audioOnly: true })
-    });
-    const { jobId } = await r.json();
-    const start = Date.now();
-    while (Date.now() - start < 120000) {
-      await new Promise(res => setTimeout(res, 3000));
-      const jr = await fetch(getBackend() + '/api/job/' + jobId);
-      const job = await jr.json();
-      if (job.status === 'done') {
-        const d = job.result;
-        S.audios = S.audios || [];
-        S.audios.push({ id: String(Date.now()), name: d.filename || 'audio', filepath: d.filepath, size: d.size });
-        renderAudios();
-        log.textContent = 'Done: ' + (d.filename || 'audio');
-        document.getElementById('audioUrlInput').value = '';
+      const outTemplate = path.join(TEMP_DIR, `${jobId}.%(ext)s`);
+
+      // Audio only mode
+      if (audioOnly) {
+        const cmd = `yt-dlp -f "bestaudio/best" --extract-audio --audio-format mp3 --audio-quality 192K --no-playlist --retries 3 --socket-timeout 30 --no-warnings -o "${outTemplate}" "${url}"`;
+        console.log('[DL AUDIO]', url);
+        await execAsync(cmd, { timeout: 120000 });
+        const files = fs.readdirSync(TEMP_DIR);
+        const mp3 = files.find(f => f.startsWith(jobId) && f.match(/\.(mp3|m4a|ogg|opus|wav)$/i));
+        if (!mp3) throw new Error('Audio download ব্যর্থ');
+        const audioPath = path.join(TEMP_DIR, mp3);
+        const title = mp3.replace(/^[^_]+_/, '').replace(/\.[^.]+$/, '');
+        jobs[jobId] = { status: 'done', result: { filepath: audioPath, filename: mp3, title, size: fs.statSync(audioPath).size / (1024*1024) } };
         return;
       }
-      if (job.status === 'error') { log.textContent = 'Error: ' + job.error; return; }
+
+      let fmt = 'best[ext=mp4]/best';
+      if (quality === '1080p') fmt = 'bestvideo[height<=1080][ext=mp4]+bestaudio/best[height<=1080]/best';
+      else if (quality === '720p') fmt = 'bestvideo[height<=720][ext=mp4]+bestaudio/best[height<=720]/best';
+      else if (quality === '480p') fmt = 'bestvideo[height<=480][ext=mp4]+bestaudio/best[height<=480]/best';
+
+      const cmd = `yt-dlp -f "${fmt}" --merge-output-format mp4 --write-thumbnail --convert-thumbnails jpg --no-playlist --retries 3 --socket-timeout 30 --no-warnings -o "${outTemplate}" "${url}"`;
+
+      console.log('[DL]', url);
+      await execAsync(cmd, { timeout: 120000 });
+
+      const files = fs.readdirSync(TEMP_DIR);
+      const mp4 = files.find(f => f.startsWith(jobId) && f.endsWith('.mp4'));
+      if (!mp4) throw new Error('ডাউনলোড ব্যর্থ - ফাইল পাওয়া যায়নি');
+
+      let videoPath = path.join(TEMP_DIR, mp4);
+
+      if (mute) {
+        const mutedPath = path.join(TEMP_DIR, `${jobId}_muted.mp4`);
+        try {
+          await execAsync(`ffmpeg -i "${videoPath}" -an -c:v copy "${mutedPath}" -y`, { timeout: 60000 });
+          fs.unlinkSync(videoPath);
+          videoPath = mutedPath;
+        } catch {}
+      }
+
+      let duration = '?';
+      try {
+        const { stdout } = await execAsync(`ffprobe -v quiet -print_format json -show_format "${videoPath}"`);
+        const secs = parseFloat(JSON.parse(stdout).format?.duration || 0);
+        duration = `${Math.floor(secs / 60)}:${String(Math.floor(secs % 60)).padStart(2, '0')}`;
+      } catch {}
+
+      let title = 'ভিডিও';
+      try {
+        const { stdout } = await execAsync(`yt-dlp --skip-download --print title "${url}" 2>/dev/null`, { timeout: 15000 });
+        if (stdout.trim()) title = stdout.trim();
+      } catch {}
+
+      const thumb = fs.readdirSync(TEMP_DIR).find(f => f.startsWith(jobId) && (f.endsWith('.jpg') || f.endsWith('.webp')));
+
+      jobs[jobId] = {
+        status: 'done',
+        result: {
+          success: true,
+          filename: path.basename(videoPath),
+          filepath: videoPath,
+          title,
+          duration,
+          size: (fs.statSync(videoPath).size / 1024 / 1024).toFixed(1) + 'MB',
+          thumbnail: thumb ? `/temp/${thumb}` : null,
+          muted: mute
+        }
+      };
+      console.log('[DL OK]', title);
+    } catch (err) {
+      console.error('[DL ERR]', err.message);
+      jobs[jobId] = { status: 'error', error: err.message };
     }
-    log.textContent = 'Timeout';
-  } catch(e) { log.textContent = 'Error: ' + e.message; }
-}
+  })();
+});
 
-async function autoMeta(v) {
-  const s = gs();
-  const apiKey = s.geminiKey || s.grokKey || s.openaiKey;
-  if (!apiKey) return;
-  const service = s.geminiKey ? 'gemini' : s.grokKey ? 'grok' : 'openai';
-  const prompt = `YouTube Shorts metadata JSON: {"title":"...","description":"...","hashtags":["#..."],"tags":["..."]} for: "${v.title}"`;
-  const r = await fetch(getBackend() + '/api/ai-generate', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ service, apiKey, prompt })
-  });
-  const data = await r.json();
-  if (r.ok) { v.meta = data; saveVideos(); }
-}
+// ========== EXTRACT AUDIO ==========
+app.post('/api/extract-audio', async (req, res) => {
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ error: 'URL required' });
 
-async function bulkAIAll() {
-  const vids = S.selected.size > 0 ? S.videos.filter(v => S.selected.has(v.id)) : S.videos;
-  toast(vids.length + 'টি ভিডিওতে AI চলছে...');
-  for (const v of vids) await singleAI(v.id).catch(() => {});
-  toast('✅ AI মেটা সম্পন্ন');
-}
+  const jobId = createJob();
+  res.json({ jobId, status: 'processing' });
 
-// ========== UPLOAD ==========
-function setPrivacy(el, p) {
-  S.privacy = p;
-  document.querySelectorAll('#privacyChips .chip').forEach(c => c.classList.remove('on'));
-  el.classList.add('on');
-}
-
-function updateUploadCount() {
-  document.getElementById('uploadVideoCount').textContent =
-    S.selected.size ? S.selected.size + 'টি ভিডিও সিলেক্ট' : 'কোনো ভিডিও সিলেক্ট নেই - ভিডিও ট্যাব থেকে সিলেক্ট করুন';
-}
-
-async function uploadOne(videoId) {
-  S.selected.clear();
-  S.selected.add(videoId);
-  switchTab('upload', document.querySelectorAll('.nav-item')[4]);
-  updateUploadCount();
-}
-
-async function uploadSelected() {
-  if (!S.selected.size) { toast('ভিডিও সিলেক্ট করুন!'); return; }
-  const vids = S.videos.filter(v => S.selected.has(v.id));
-  const title = document.getElementById('upTitle').value.trim();
-  const desc = document.getElementById('upDesc').value.trim();
-  upLog('আপলোড শুরু হচ্ছে...');
-
-  for (const v of vids) {
-    upLog('📤 আপলোড: ' + (v.meta?.title || v.title));
+  (async () => {
     try {
-      const r = await fetch(getBackend() + '/api/upload', {
+      const outTemplate = path.join(TEMP_DIR, `${jobId}.%(ext)s`);
+      await execAsync(`yt-dlp -f "bestaudio/best" --extract-audio --audio-format mp3 --audio-quality 192K --no-playlist --retries 3 -o "${outTemplate}" "${url}"`, { timeout: 120000 });
+
+      const audio = fs.readdirSync(TEMP_DIR).find(f => f.startsWith(jobId));
+      if (!audio) throw new Error('অডিও পাওয়া যায়নি');
+
+      const audioPath = path.join(TEMP_DIR, audio);
+      let title = 'অডিও';
+      try {
+        const { stdout } = await execAsync(`yt-dlp --skip-download --print title "${url}" 2>/dev/null`, { timeout: 15000 });
+        if (stdout.trim()) title = stdout.trim();
+      } catch {}
+
+      jobs[jobId] = {
+        status: 'done',
+        result: {
+          success: true, title,
+          audioUrl: `/temp/${audio}`,
+          filepath: audioPath,
+          size: (fs.statSync(audioPath).size / 1024 / 1024).toFixed(1) + 'MB'
+        }
+      };
+    } catch (err) {
+      jobs[jobId] = { status: 'error', error: err.message };
+    }
+  })();
+});
+
+// ========== MERGE AUDIO ==========
+app.post('/api/merge-audio', async (req, res) => {
+  const { videoPath, audioPath } = req.body;
+  try {
+    if (!videoPath || !fs.existsSync(videoPath)) throw new Error('ভিডিও ফাইল নেই: ' + videoPath);
+
+    let localAudio = audioPath;
+    if (audioPath && audioPath.startsWith('/temp/')) localAudio = path.join(TEMP_DIR, path.basename(audioPath));
+    if (!localAudio || !fs.existsSync(localAudio)) throw new Error('অডিও ফাইল নেই। আবার অডিও যোগ করুন।');
+
+    const outName = path.basename(videoPath).replace(/_muted|_merged/g, '').replace('.mp4', '_merged.mp4');
+    const outFile = path.join(TEMP_DIR, outName);
+
+    await execAsync(`ffmpeg -i "${videoPath}" -stream_loop -1 -i "${localAudio}" -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a 192k -shortest "${outFile}" -y`, { timeout: 180000 });
+    if (!fs.existsSync(outFile)) throw new Error('মার্জ হয়নি');
+
+    if (videoPath !== outFile && fs.existsSync(videoPath)) fs.unlinkSync(videoPath);
+    res.json({ success: true, outputPath: outFile, filename: outName });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ========== AI GENERATE ==========
+app.post('/api/ai-generate', async (req, res) => {
+  const { service, apiKey, prompt } = req.body;
+  try {
+    const fetch = (await import('node-fetch')).default;
+    let text = '';
+
+    if (service === 'gemini') {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey || process.env.GEMINI_API_KEY}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          filepath: v.filepath,
-          title: title || v.meta?.title || v.title,
-          description: desc || v.meta?.description || '',
-          tags: v.meta?.tags || [],
-          hashtags: v.meta?.hashtags || [],
-          privacy: S.privacy,
-          deleteAfter: gs().deleteAfter
-        })
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.9, maxOutputTokens: 1500 } })
       });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.error);
-      upLog('✅ হয়েছে: youtu.be/' + data.videoId);
-      if (gs().deleteAfter) { S.videos = S.videos.filter(v2 => v2.id !== v.id); S.selected.delete(v.id); }
-    } catch (err) { upLog('✗ ত্রুটি: ' + err.message, true); }
-  }
-  saveVideos(); renderVideos();
-}
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error?.message);
+      text = d.candidates?.[0]?.content?.parts?.[0]?.text || '';
 
-async function bulkUpload() { uploadSelected(); }
-async function bulkZip() {
-  const vids = S.videos.filter(v => S.selected.has(v.id));
-  toast('ZIP তৈরি হচ্ছে...');
-  try {
-    const r = await fetch(getBackend() + '/api/export-zip', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filepaths: vids.map(v => v.filepath) })
-    });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error);
-    if (data.downloadUrl) window.open(getBackend() + data.downloadUrl);
-    else if (data.driveUrl) window.open(data.driveUrl);
-    toast('✅ ZIP তৈরি হয়েছে!');
-  } catch (err) { toast('ত্রুটি: ' + err.message); }
-}
+    } else if (service === 'grok') {
+      // xAI Grok
+      const r = await fetch('https://api.x.ai/v1/chat/completions', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify({ model: 'grok-3-mini', messages: [{ role: 'user', content: prompt }], temperature: 0.9, max_tokens: 1500 })
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error?.message || JSON.stringify(d));
+      text = d.choices?.[0]?.message?.content || '';
 
-function upLog(msg, err) {
-  const box = document.getElementById('uploadLog');
-  const d = document.createElement('div');
-  d.textContent = '[' + new Date().toLocaleTimeString('bn') + '] ' + msg;
-  if (err) d.className = 'log-err';
-  box.appendChild(d); box.scrollTop = box.scrollHeight;
-}
+    } else if (service === 'groq') {
+      // Groq (free, fast) — console.groq.com
+      const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'user', content: prompt }], temperature: 0.9, max_tokens: 1500 })
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error?.message || JSON.stringify(d));
+      text = d.choices?.[0]?.message?.content || '';
 
-// ========== SCHEDULE ==========
-const SCHED = {
-  slots: [],
-  days: [0,1,2,3,4,5,6],
-  running: false,
-  timer: null
-};
-
-function initSched() {
-  const s = gs();
-  if (s.schedSlots) SCHED.slots = s.schedSlots;
-  if (s.schedDays) SCHED.days = s.schedDays;
-  if (s.schedFolderId) document.getElementById('schedFolderId').value = s.schedFolderId;
-  if (s.schedAudioFolderId) document.getElementById('schedAudioFolderId').value = s.schedAudioFolderId;
-  if (s.schedMaxVids) document.getElementById('schedMaxVids').value = s.schedMaxVids;
-  if (s.schedPrivacy) document.getElementById('schedPrivacy').value = s.schedPrivacy;
-  if (s.schedDeleteAfter === false) document.getElementById('schedDeleteToggle').classList.remove('on');
-  if (s.schedAI === false) document.getElementById('schedAIToggle').classList.remove('on');
-  if (s.schedEnabled) { document.getElementById('schedMasterToggle').classList.add('on'); document.getElementById('schedStatusText').textContent = '✅ চালু আছে'; startSchedTimer(); }
-  renderDays(); renderSlots();
-}
-
-let schedSource = 'folder';
-
-function setSchedSource(el, src) {
-  schedSource = src;
-  document.querySelectorAll('#schedSourceChips .chip').forEach(c => c.classList.remove('on'));
-  el.classList.add('on');
-  document.getElementById('schedFolderMode').style.display = src === 'folder' ? 'block' : 'none';
-  document.getElementById('schedZipMode').style.display = src === 'zip' ? 'block' : 'none';
-  document.getElementById('schedMaxVidsRow').style.display = src === 'zip' ? 'none' : 'block';
-}
-
-
-function saveSched() {
-  const cfg = {
-    enabled: document.getElementById('schedMasterToggle').classList.contains('on'),
-    slots: SCHED.slots,
-    days: SCHED.days,
-    folderId: document.getElementById('schedFolderId').value.trim(),
-    audioFolderId: document.getElementById('schedAudioFolderId').value.trim() || null,
-    maxVideos: parseInt(document.getElementById('schedMaxVids').value) || 3,
-    privacy: document.getElementById('schedPrivacy').value,
-    deleteAfterUpload: document.getElementById('schedDeleteToggle').classList.contains('on'),
-    aiService: document.getElementById('schedAIToggle').classList.contains('on') ? (gs().groqKey ? 'groq' : gs().geminiKey ? 'gemini' : gs().grokKey ? 'grok' : gs().openaiKey ? 'openai' : null) : null,
-    aiKey: document.getElementById('schedAIToggle').classList.contains('on') ? (gs().groqKey || gs().geminiKey || gs().grokKey || gs().openaiKey || null) : null
-  };
-  ss({ schedSlots: SCHED.slots, schedDays: SCHED.days, schedFolderId: cfg.folderId, schedAudioFolderId: cfg.audioFolderId, schedMaxVids: cfg.maxVideos, schedPrivacy: cfg.privacy, schedDeleteAfter: cfg.deleteAfterUpload, schedAI: cfg.aiService !== null, schedEnabled: cfg.enabled });
-  fetch(getBackend() + '/api/schedule/save', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(cfg)
-  }).catch(e => console.warn('[SCHED] Sync failed:', e.message));
-}
-
-function toggleMasterSched(el) {
-  el.classList.toggle('on');
-  const on = el.classList.contains('on');
-  document.getElementById('schedStatusText').textContent = on ? '✅ চালু আছে' : 'বন্ধ আছে';
-  if (on) { saveSched(); startSchedTimer(); toast('✅ শিডিউলার চালু', 2000); }
-  else { stopSchedTimer(); saveSched(); toast('⏸ শিডিউলার বন্ধ', 2000); }
-}
-
-function renderDays() {
-  document.querySelectorAll('#schedDays .dbtn').forEach(btn => {
-    const d = parseInt(btn.dataset.d);
-    btn.classList.toggle('on', SCHED.days.includes(d));
-    btn.onclick = () => {
-      if (SCHED.days.includes(d)) SCHED.days = SCHED.days.filter(x => x !== d);
-      else SCHED.days.push(d);
-      btn.classList.toggle('on', SCHED.days.includes(d));
-      saveSched();
-    };
-  });
-}
-
-function renderSlots() {
-  const list = document.getElementById('timeSlotList');
-  const none = document.getElementById('noSlots');
-  none.style.display = SCHED.slots.length ? 'none' : 'block';
-  list.innerHTML = SCHED.slots.map((s, i) => `
-    <div class="slot-item">
-      <div class="slot-time">${s.time}</div>
-      <div class="slot-label">${s.label}</div>
-      <button class="slot-toggle ${s.on ? 'on' : ''}" onclick="toggleSlot(${i},this)"></button>
-      <button class="btn btn-xs btn-ghost" onclick="removeSlot(${i})" style="padding:4px 8px">✕</button>
-    </div>`).join('');
-}
-
-function toggleSlot(i, el) {
-  SCHED.slots[i].on = !SCHED.slots[i].on;
-  el.classList.toggle('on', SCHED.slots[i].on);
-  saveSched();
-}
-
-function removeSlot(i) {
-  SCHED.slots.splice(i, 1);
-  renderSlots(); saveSched();
-}
-
-function addTimeSlot() {
-  const time = prompt('সময় দিন (HH:MM)', '12:00');
-  if (!time || !time.match(/^\d{2}:\d{2}$/)) { toast('সঠিক সময় দিন (HH:MM)'); return; }
-  const label = prompt('লেবেল দিন', time + ' পোস্ট') || time + ' পোস্ট';
-  SCHED.slots.push({ time, label, on: true });
-  SCHED.slots.sort((a, b) => a.time.localeCompare(b.time));
-  renderSlots(); saveSched();
-  toast('✅ ' + time + ' যোগ হয়েছে');
-}
-
-function startSchedTimer() {
-  stopSchedTimer();
-  SCHED.timer = setInterval(() => checkSchedTick(), 30000);
-  checkSchedTick();
-  schedLog('✅ শিডিউলার চালু হয়েছে');
-}
-
-function stopSchedTimer() {
-  if (SCHED.timer) { clearInterval(SCHED.timer); SCHED.timer = null; }
-}
-
-function checkSchedTick() {
-  if (!document.getElementById('schedMasterToggle').classList.contains('on')) return;
-  const now = new Date();
-  const day = now.getDay();
-  if (!SCHED.days.includes(day)) return;
-  const cur = String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0');
-  const slot = SCHED.slots.find(s => s.on && s.time === cur && s._lastRun !== now.toDateString());
-  if (slot) {
-    slot._lastRun = now.toDateString();
-    schedLog('⏰ ' + slot.time + ' — অটো আপলোড শুরু');
-    runAutoUpload();
-  }
-}
-
-async function runNow() {
-  saveSched();
-  const folderId = document.getElementById('schedFolderId').value.trim();
-  if (!folderId) { toast('Drive Folder ID দিন!'); return; }
-  schedLog('🚀 ম্যানুয়াল আপলোড শুরু...');
-
-  const cfg = {
-    folderId,
-    audioFolderId: document.getElementById('schedAudioFolderId').value.trim() || null,
-    maxVideos: parseInt(document.getElementById('schedMaxVids').value) || 3,
-    privacy: document.getElementById('schedPrivacy').value,
-    deleteAfterUpload: document.getElementById('schedDeleteToggle').classList.contains('on'),
-    aiService: document.getElementById('schedAIToggle').classList.contains('on') ? (gs().groqKey ? 'groq' : gs().geminiKey ? 'gemini' : gs().grokKey ? 'grok' : gs().openaiKey ? 'openai' : null) : null,
-    aiKey: document.getElementById('schedAIToggle').classList.contains('on') ? (gs().groqKey || gs().geminiKey || gs().grokKey || gs().openaiKey || null) : null
-  };
-
-  try {
-    const r = await fetch(getBackend() + '/api/schedule/run-now', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(cfg)
-    });
-    const { jobId } = await r.json();
-    schedLog('⏳ আপলোড হচ্ছে... (Job: ' + jobId + ')');
-
-    const maxWait = 30 * 60 * 1000;
-    const start = Date.now();
-    while (Date.now() - start < maxWait) {
-      await new Promise(res => setTimeout(res, 5000));
-      const jr = await fetch(getBackend() + '/api/job/' + jobId);
-      const job = await jr.json();
-      if (job.status === 'done') {
-        const res = job.result;
-        schedLog(`✅ সম্পন্ন! সফল: ${res.results.filter(r=>r.status==='ok').length}/${res.total}`);
-        res.results.forEach(r => {
-          if (r.status === 'ok') schedLog(`  ✓ ${r.audioFile || r.title || 'video'} → youtu.be/${r.videoId}`);
-          else schedLog(`  ✗ ${r.error}`, true);
-        });
-        break;
-      }
-      if (job.status === 'error') { schedLog('✗ ' + job.error, true); break; }
+    } else if (service === 'openai') {
+      const r = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey || process.env.OPENAI_API_KEY}` },
+        body: JSON.stringify({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: prompt }], temperature: 0.9, max_tokens: 1500 })
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error?.message);
+      text = d.choices?.[0]?.message?.content || '';
     }
-  } catch(e) { schedLog('✗ ' + e.message, true); }
-}
 
-async function runAutoUpload() {
-  if (SCHED.running) { toast('আগের আপলোড চলছে...'); return; }
-  SCHED.running = true;
-
-  const folderId = document.getElementById('schedFolderId').value.trim();
-  const audioFolderId = document.getElementById('schedAudioFolderId').value.trim();
-  const maxVids = parseInt(document.getElementById('schedMaxVids').value) || 3;
-  const privacy = document.getElementById('schedPrivacy').value;
-  const deleteAfter = document.getElementById('schedDeleteToggle').classList.contains('on');
-  const useAI = document.getElementById('schedAIToggle').classList.contains('on');
-  const backend = getBackend();
-
-  const s = gs();
-  const aiService = s.geminiKey ? 'gemini' : s.grokKey ? 'grok' : s.openaiKey ? 'openai' : null;
-  const aiKey = s.groqKey || s.geminiKey || s.grokKey || s.openaiKey || null;
-
-  if (!folderId && schedSource === 'folder') { schedLog('✗ ভিডিও Folder ID নেই!', true); SCHED.running = false; return; }
-
-  const zipFileId = document.getElementById('schedZipFileId')?.value.trim();
-  if (!zipFileId && schedSource === 'zip') { schedLog('✗ ZIP File ID নেই!', true); SCHED.running = false; return; }
-
-  try {
-    let endpoint, body;
-
-    if (schedSource === 'zip') {
-      endpoint = backend + '/api/drive/zip-upload';
-      body = { fileId: zipFileId, audioFolderId: audioFolderId || null, privacy, deleteAfterUpload: deleteAfter, aiService: useAI ? aiService : null, aiKey: useAI ? aiKey : null };
-      schedLog('🗜 ZIP থেকে আপলোড শুরু...');
-    } else {
-      endpoint = backend + '/api/drive/auto-upload';
-      body = { folderId, audioFolderId: audioFolderId || null, maxVideos: maxVids, privacy, deleteAfterUpload: deleteAfter, aiService: useAI ? aiService : null, aiKey: useAI ? aiKey : null };
-      schedLog('📁 Drive Folder থেকে আপলোড শুরু...');
-    }
-    const r = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-    if (!r.ok) throw new Error(await r.text());
-    const { jobId } = await r.json();
-
-    schedLog('⏳ আপলোড হচ্ছে...');
-
-    // Poll
-    const maxWait = 30 * 60 * 1000;
-    const start = Date.now();
-    while (Date.now() - start < maxWait) {
-      await new Promise(res => setTimeout(res, 5000));
-      const jr = await fetch(backend + '/api/job/' + jobId);
-      const job = await jr.json();
-
-      if (job.status === 'done') {
-        const res = job.result;
-        schedLog(`✅ সম্পন্ন! মোট: ${res.total}, সফল: ${res.results.filter(r=>r.status==='ok').length}`);
-        res.results.forEach(r => {
-          if (r.status === 'ok') schedLog(`  ✓ ${r.file} → youtu.be/${r.videoId}`);
-          else schedLog(`  ✗ ${r.file}: ${r.error}`, true);
-        });
-        break;
-      }
-      if (job.status === 'error') { schedLog('✗ ত্রুটি: ' + job.error, true); break; }
+    try {
+      const p = JSON.parse(text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
+      res.json({ title: p.title || '', description: p.description || '', hashtags: p.hashtags || [], tags: p.tags || [], category: p.category || '' });
+    } catch {
+      res.json({ title: text.substring(0, 100), description: '', hashtags: (text.match(/#[^\s]+/g) || []).slice(0, 20), tags: [], category: '' });
     }
   } catch (err) {
-    schedLog('✗ ত্রুটি: ' + err.message, true);
+    res.status(500).json({ error: err.message });
   }
+});
 
-  SCHED.running = false;
+// ========== UPLOAD YOUTUBE ==========
+app.post('/api/upload', async (req, res) => {
+  const { filepath, title, description, tags, hashtags, privacy, categoryId, deleteAfter } = req.body;
+  try {
+    const t = loadTokens();
+    const token = t.access_token || process.env.YT_ACCESS_TOKEN;
+    if (!token) throw new Error('YouTube সংযুক্ত নয়');
+    if (!filepath || !fs.existsSync(filepath)) throw new Error('ফাইল নেই');
+
+    const fetch = (await import('node-fetch')).default;
+    const meta = {
+      snippet: { title: (title || 'Video').substring(0, 100), description: `${description || ''}\n\n${(hashtags || []).join(' ')}`.trim().substring(0, 5000), tags: (tags || []).slice(0, 30), categoryId: categoryId || '22' },
+      status: { privacyStatus: privacy || 'private', selfDeclaredMadeForKids: false }
+    };
+
+    const fileSize = fs.statSync(filepath).size;
+    const initRes = await fetch('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'X-Upload-Content-Type': 'video/mp4', 'X-Upload-Content-Length': fileSize },
+      body: JSON.stringify(meta)
+    });
+    if (!initRes.ok) throw new Error('Init failed: ' + await initRes.text());
+
+    const uploadUrl = initRes.headers.get('location');
+    const buf = fs.readFileSync(filepath);
+    const upRes = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': 'video/mp4', 'Content-Length': buf.length }, body: buf });
+    if (!upRes.ok) throw new Error('Upload failed: ' + await upRes.text());
+
+    const data = await upRes.json();
+    if (deleteAfter && fs.existsSync(filepath)) fs.unlinkSync(filepath);
+    res.json({ success: true, videoId: data.id, url: `https://youtu.be/${data.id}` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ========== ZIP + DRIVE ==========
+app.post('/api/export-zip', async (req, res) => {
+  const { filepaths, uploadToDrive, driveFolderId } = req.body;
+  try {
+    const archiver = require('archiver');
+    const zipName = `videos_${Date.now()}.zip`;
+    const zipPath = path.join(TEMP_DIR, zipName);
+
+    await new Promise((resolve, reject) => {
+      const out = fs.createWriteStream(zipPath);
+      const arc = archiver('zip', { zlib: { level: 6 } });
+      out.on('close', resolve); arc.on('error', reject); arc.pipe(out);
+      (filepaths || []).forEach(fp => { if (fp && fs.existsSync(fp)) arc.file(fp, { name: path.basename(fp) }); });
+      arc.finalize();
+    });
+
+    if (uploadToDrive) {
+      try {
+        const fetch = (await import('node-fetch')).default;
+        const FormData = (await import('form-data')).default;
+        const t = loadTokens();
+        const token = t.drive_access_token || process.env.DRIVE_ACCESS_TOKEN;
+        if (token) {
+          const form = new FormData();
+          form.append('metadata', JSON.stringify({ name: zipName, parents: driveFolderId ? [driveFolderId] : [] }), { contentType: 'application/json' });
+          form.append('file', fs.createReadStream(zipPath), { contentType: 'application/zip' });
+          const r = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+            method: 'POST', headers: { 'Authorization': `Bearer ${token}`, ...form.getHeaders() }, body: form
+          });
+          if (r.ok) {
+            const d = await r.json();
+            return res.json({ success: true, driveUrl: `https://drive.google.com/file/d/${d.id}/view` });
+          }
+        }
+      } catch {}
+    }
+
+    res.json({ success: true, downloadUrl: `/temp/${zipName}` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ========== VIDEO STREAM ==========
+app.get('/api/stream', (req, res) => {
+  const filePath = path.join(TEMP_DIR, path.basename(req.query.file || ''));
+  if (!req.query.file || !fs.existsSync(filePath)) return res.status(404).send('Not found');
+  const stat = fs.statSync(filePath);
+  const range = req.headers.range;
+  if (range) {
+    const [s, e] = range.replace(/bytes=/, '').split('-');
+    const start = parseInt(s), end = e ? parseInt(e) : stat.size - 1;
+    res.writeHead(206, { 'Content-Range': `bytes ${start}-${end}/${stat.size}`, 'Accept-Ranges': 'bytes', 'Content-Length': end - start + 1, 'Content-Type': 'video/mp4' });
+    fs.createReadStream(filePath, { start, end }).pipe(res);
+  } else {
+    res.writeHead(200, { 'Content-Length': stat.size, 'Content-Type': 'video/mp4' });
+    fs.createReadStream(filePath).pipe(res);
+  }
+});
+
+// ========== DELETE ==========
+app.post('/api/delete', (req, res) => {
+  try { if (req.body.filepath && fs.existsSync(req.body.filepath)) fs.unlinkSync(req.body.filepath); res.json({ success: true }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ========== STATUS ==========
+app.get('/api/status', (req, res) => {
+  const t = loadTokens();
+  res.json({ youtube: !!t.access_token, drive: !!t.drive_access_token, ytChannel: t.channel_name || null });
+});
+
+// ========== TOKEN STORAGE ==========
+const TOKEN_FILE = path.join(__dirname, 'tokens.json');
+
+function saveTokens(t) {
+  // Local save
+  fs.writeFileSync(TOKEN_FILE, JSON.stringify(t, null, 2));
+  // Drive backup (async, don't wait)
+  backupTokensToDrive(t).catch(e => console.warn('[TOKEN] Drive backup failed:', e.message));
 }
 
-function schedLog(msg, err) {
-  const box = document.getElementById('schedLog');
-  if (!box) return;
-  const d = document.createElement('div');
-  const t = new Date().toLocaleTimeString('bn');
-  d.textContent = '[' + t + '] ' + msg;
-  if (err) d.style.color = 'var(--red)';
-  box.appendChild(d);
-  box.scrollTop = box.scrollHeight;
+function loadTokens() {
+  try {
+    if (fs.existsSync(TOKEN_FILE)) {
+      const t = JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf8'));
+      if (t && Object.keys(t).length > 0) return t;
+    }
+  } catch {}
+  return {};
 }
 
-// ========== SETTINGS ==========
-function saveBackend() {
-  const url = document.getElementById('backendUrl').value.trim().replace(/\/$/, '');
-  ss({ backendUrl: url }); checkConnection(); toast('💾 সেভ হয়েছে');
-}
+// Drive token backup file name
+const TOKEN_DRIVE_NAME = 'yta_tokens_backup.json';
+let tokenDriveFileId = process.env.TOKEN_DRIVE_FILE_ID || null;
 
-function saveOAuth() {
-  ss({ ytClientId: document.getElementById('ytClientId').value.trim(), ytClientSecret: document.getElementById('ytClientSecret').value.trim() });
-  toast('💾 OAuth সেভ হয়েছে');
-}
+async function backupTokensToDrive(tokens) {
+  try {
+    const fetch = (await import('node-fetch')).default;
+    const driveToken = tokens.drive_access_token;
+    if (!driveToken) return;
 
-function saveAIKeys() {
-  ss({ geminiKey: document.getElementById('geminiKey').value.trim(), groqKey: document.getElementById('groqKey').value.trim(), grokKey: document.getElementById('grokKey').value.trim(), openaiKey: document.getElementById('openaiKey').value.trim() });
-  toast('💾 AI Keys সেভ হয়েছে');
-}
+    const content = JSON.stringify(tokens, null, 2);
+    const boundary = 'tokenboundary';
 
-function savePref() {
-  ss({
-    autoMute: document.getElementById('autoMuteToggle').classList.contains('on'),
-    autoAI: document.getElementById('autoAIToggle').classList.contains('on'),
-    deleteAfter: document.getElementById('deleteAfterToggle').classList.contains('on')
-  });
-}
-
-async function connectYouTube() {
-  const s = gs();
-  const clientId = s.ytClientId || document.getElementById('ytClientId').value.trim();
-  if (!clientId) { toast('Settings-এ Client ID দিন!'); return; }
-  const backend = getBackend();
-  const scope = encodeURIComponent('https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube');
-  const redirect = encodeURIComponent(backend + '/auth/youtube/callback');
-  const url = `https://accounts.google.com/o/oauth2/auth?client_id=${clientId}&redirect_uri=${redirect}&scope=${scope}&response_type=code&access_type=offline&prompt=consent`;
-  window.open(url, '_blank', 'width=500,height=600');
-  toast('YouTube কানেক্ট পেজ খুলছে...');
-  const t = setInterval(async () => {
-    try {
-      const r = await fetch(backend + '/api/status');
+    if (tokenDriveFileId) {
+      // Update existing file
+      await fetch(`https://www.googleapis.com/upload/drive/v3/files/${tokenDriveFileId}?uploadType=media`, {
+        method: 'PATCH',
+        headers: { 'Authorization': `Bearer ${driveToken}`, 'Content-Type': 'application/json' },
+        body: content
+      });
+    } else {
+      // Create new file
+      const meta = JSON.stringify({ name: TOKEN_DRIVE_NAME, mimeType: 'application/json' });
+      const body = `--${boundary}\r\nContent-Type: application/json\r\n\r\n${meta}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${content}\r\n--${boundary}--`;
+      const r = await fetch(`https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${driveToken}`, 'Content-Type': `multipart/related; boundary=${boundary}` },
+        body
+      });
       const d = await r.json();
-      if (d.youtube) { clearInterval(t); checkAuthStatus(); toast('✅ YouTube সংযুক্ত!'); }
-    } catch {}
-  }, 3000);
-  setTimeout(() => clearInterval(t), 120000);
+      if (d.id) { tokenDriveFileId = d.id; console.log('[TOKEN] Drive backup created:', d.id); }
+    }
+  } catch (e) { console.warn('[TOKEN] Backup error:', e.message); }
 }
 
-async function connectDrive() {
-  const s = gs();
-  const clientId = s.driveClientId || s.ytClientId || document.getElementById('ytClientId').value.trim();
-  if (!clientId) { toast('Settings-এ Client ID দিন!'); return; }
-  const backend = getBackend();
-  const scope = encodeURIComponent('https://www.googleapis.com/auth/drive.file');
-  const redirect = encodeURIComponent(backend + '/auth/drive/callback');
-  const url = `https://accounts.google.com/o/oauth2/auth?client_id=${clientId}&redirect_uri=${redirect}&scope=${scope}&response_type=code&access_type=offline&prompt=consent`;
-  window.open(url, '_blank', 'width=500,height=600');
-  toast('Google Drive কানেক্ট পেজ খুলছে...');
-  const t = setInterval(async () => {
+async function restoreTokensFromDrive() {
+  try {
+    const fetch = (await import('node-fetch')).default;
+    // Need a service token - use env vars if available
+    const driveToken = process.env.DRIVE_ACCESS_TOKEN;
+    if (!driveToken) return;
+
+    // Search for backup file
+    const r = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q=name='${TOKEN_DRIVE_NAME}' and trashed=false&fields=files(id,name)`,
+      { headers: { 'Authorization': `Bearer ${driveToken}` } }
+    );
+    const data = await r.json();
+    if (!data.files?.length) return;
+
+    const fileId = data.files[0].id;
+    tokenDriveFileId = fileId;
+
+    const fr = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+      headers: { 'Authorization': `Bearer ${driveToken}` }
+    });
+    const tokens = await fr.json();
+    if (tokens && tokens.access_token) {
+      fs.writeFileSync(TOKEN_FILE, JSON.stringify(tokens, null, 2));
+      console.log('[TOKEN] Restored from Drive ✅');
+    }
+  } catch (e) { console.warn('[TOKEN] Restore failed:', e.message); }
+}
+
+// On startup, try to restore tokens from Drive
+restoreTokensFromDrive();
+
+// ========== YOUTUBE OAUTH ==========
+app.get('/auth/youtube/callback', async (req, res) => {
+  const { code } = req.query;
+  if (!code) return res.status(400).send('No code');
+  try {
+    const fetch = (await import('node-fetch')).default;
+    const r = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ code, client_id: process.env.YT_CLIENT_ID, client_secret: process.env.YT_CLIENT_SECRET, redirect_uri: `${process.env.BASE_URL}/auth/youtube/callback`, grant_type: 'authorization_code' })
+    });
+    const tokens = await r.json();
+    if (!tokens.access_token) throw new Error(JSON.stringify(tokens));
+
+    let channelName = '';
     try {
-      const r = await fetch(backend + '/api/status');
-      const d = await r.json();
-      if (d.drive) { clearInterval(t); checkAuthStatus(); toast('✅ Drive সংযুক্ত!'); }
+      const ch = await fetch('https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true', { headers: { 'Authorization': `Bearer ${tokens.access_token}` } });
+      channelName = (await ch.json()).items?.[0]?.snippet?.title || '';
     } catch {}
-  }, 3000);
-  setTimeout(() => clearInterval(t), 120000);
+
+    saveTokens({ ...loadTokens(), access_token: tokens.access_token, refresh_token: tokens.refresh_token, channel_name: channelName });
+    res.send(`<html><body style="background:#0a0a0f;color:#06d6a0;font-family:sans-serif;text-align:center;padding:60px"><div style="font-size:48px">✅</div><h2>YouTube সংযুক্ত!</h2>${channelName ? `<p style="color:#fff">${channelName}</p>` : ''}<p style="color:#666">পেজ বন্ধ করুন</p><script>setTimeout(()=>window.close(),2000)</script></body></html>`);
+  } catch (err) { res.send(`<html><body style="background:#0a0a0f;color:red;padding:40px;font-family:sans-serif"><h2>${err.message}</h2></body></html>`); }
+});
+
+// ========== DRIVE OAUTH ==========
+app.get('/auth/drive/callback', async (req, res) => {
+  const { code } = req.query;
+  if (!code) return res.status(400).send('No code');
+  try {
+    const fetch = (await import('node-fetch')).default;
+    const r = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ code, client_id: process.env.DRIVE_CLIENT_ID || process.env.YT_CLIENT_ID, client_secret: process.env.DRIVE_CLIENT_SECRET || process.env.YT_CLIENT_SECRET, redirect_uri: `${process.env.BASE_URL}/auth/drive/callback`, grant_type: 'authorization_code' })
+    });
+    const tokens = await r.json();
+    if (!tokens.access_token) throw new Error(JSON.stringify(tokens));
+    saveTokens({ ...loadTokens(), drive_access_token: tokens.access_token, drive_refresh_token: tokens.refresh_token });
+    res.send(`<html><body style="background:#0a0a0f;color:#06d6a0;font-family:sans-serif;text-align:center;padding:60px"><div style="font-size:48px">✅</div><h2>Google Drive সংযুক্ত!</h2><p style="color:#666">পেজ বন্ধ করুন</p><script>setTimeout(()=>window.close(),2000)</script></body></html>`);
+  } catch (err) { res.send(`<html><body style="background:#0a0a0f;color:red;padding:40px;font-family:sans-serif"><h2>${err.message}</h2></body></html>`); }
+});
+
+// ========== SERVER-SIDE SCHEDULER ==========
+const SCHED_FILE = path.join(__dirname, 'schedule.json');
+
+function loadSchedConfig() {
+  try {
+    if (fs.existsSync(SCHED_FILE)) return JSON.parse(fs.readFileSync(SCHED_FILE, 'utf8'));
+  } catch {}
+  return { enabled: false, slots: [], days: [0,1,2,3,4,5,6], folderId: '', audioFolderId: '', maxVideos: 3, privacy: 'private', deleteAfterUpload: true, aiService: null, aiKey: null };
 }
 
-// ========== UTILS ==========
-function toast(msg, duration = 2500) {
-  const el = document.createElement('div');
-  el.textContent = msg;
-  el.style.cssText = 'position:fixed;bottom:90px;left:50%;transform:translateX(-50%);background:#222;color:#fff;padding:10px 18px;border-radius:20px;font-size:13px;z-index:9999;max-width:80%;text-align:center;box-shadow:0 4px 20px rgba(0,0,0,.5)';
-  document.body.appendChild(el);
-  setTimeout(() => el.remove(), duration);
+function saveSchedConfig(cfg) {
+  fs.writeFileSync(SCHED_FILE, JSON.stringify(cfg, null, 2));
 }
 
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+// Save schedule config from frontend
+app.post('/api/schedule/save', (req, res) => {
+  const cfg = { ...loadSchedConfig(), ...req.body };
+  saveSchedConfig(cfg);
+  if (cfg.enabled) startServerScheduler();
+  else stopServerScheduler();
+  res.json({ success: true, config: cfg });
+});
 
-// Load persisted data (handled in DOMContentLoaded)
-</script>
-</body>
-</html>
+// Get current schedule config
+app.get('/api/schedule/config', (req, res) => {
+  res.json(loadSchedConfig());
+});
+
+// Manual trigger
+app.post('/api/schedule/run-now', async (req, res) => {
+  const cfg = { ...loadSchedConfig(), ...req.body };
+  const jobId = await triggerAutoUpload(cfg);
+  res.json({ jobId });
+});
+
+let schedTimer = null;
+let lastRunMap = {}; // slot -> date string
+
+function startServerScheduler() {
+  stopServerScheduler();
+  schedTimer = setInterval(checkServerSchedule, 30000); // check every 30 sec
+  checkServerSchedule();
+  console.log('[SCHED] Server scheduler started');
+}
+
+function stopServerScheduler() {
+  if (schedTimer) { clearInterval(schedTimer); schedTimer = null; }
+  console.log('[SCHED] Server scheduler stopped');
+}
+
+async function checkServerSchedule() {
+  const cfg = loadSchedConfig();
+  if (!cfg.enabled || !cfg.slots?.length) return;
+
+  const now = new Date();
+  const day = now.getDay();
+  if (!cfg.days?.includes(day)) return;
+
+  const cur = String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0');
+  const today = now.toDateString();
+
+  for (const slot of cfg.slots) {
+    if (!slot.on) continue;
+    if (slot.time !== cur) continue;
+    const key = slot.time + '_' + today;
+    if (lastRunMap[key]) continue; // already ran today at this time
+
+    lastRunMap[key] = true;
+    console.log('[SCHED] Triggering upload for slot:', slot.time);
+    await triggerAutoUpload(cfg);
+  }
+}
+
+async function triggerAutoUpload(cfg) {
+  const jobId = createJob();
+
+  (async () => {
+    try {
+      const fetch = (await import('node-fetch')).default;
+      const t = loadTokens();
+      const driveToken = t.drive_access_token;
+      const ytToken = t.access_token;
+
+      if (!driveToken) throw new Error('Drive সংযুক্ত নয়');
+      if (!ytToken) throw new Error('YouTube সংযুক্ত নয়');
+      if (!cfg.folderId) throw new Error('Video Folder ID নেই');
+
+      // List videos from Drive
+      const q = encodeURIComponent(`'${cfg.folderId}' in parents and trashed=false`);
+      const listRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,mimeType,size)&pageSize=100`, {
+        headers: { 'Authorization': `Bearer ${driveToken}` }
+      });
+      const listData = await listRes.json();
+      const allVideos = (listData.files || []).filter(f => f.mimeType?.includes('video') || f.name?.match(/\.(mp4|mov|avi|mkv|webm)$/i));
+
+      if (!allVideos.length) { jobs[jobId] = { status: 'error', error: 'Drive-এ কোনো ভিডিও নেই' }; return; }
+
+      // Shuffle all videos — maxVideos দিয়ে cap করো
+      const maxV = parseInt(cfg.maxVideos) || 5;
+      const videos = allVideos.sort(() => Math.random() - 0.5).slice(0, maxV);
+      console.log(`[SCHED] Total videos available: ${allVideos.length} | Using max: ${maxV}`);
+
+      // Get audio files
+      let audioFiles = [];
+      if (cfg.audioFolderId) {
+        const aq = encodeURIComponent(`'${cfg.audioFolderId}' in parents and trashed=false`);
+        const ar = await fetch(`https://www.googleapis.com/drive/v3/files?q=${aq}&fields=files(id,name,mimeType)&pageSize=50`, {
+          headers: { 'Authorization': `Bearer ${driveToken}` }
+        });
+        const ad = await ar.json();
+        audioFiles = (ad.files || []).filter(f => f.name?.match(/\.(mp3|m4a|wav|aac|ogg)$/i));
+        console.log('[SCHED] Found', audioFiles.length, 'audio files');
+      }
+
+      const results = [];
+
+      // ===== HELPER: Get duration via ffprobe =====
+      async function getDuration(filePath) {
+        try {
+          const { stdout } = await execAsync(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath}"`, { timeout: 15000 });
+          return parseFloat(stdout.trim()) || 0;
+        } catch { return 0; }
+      }
+
+      // ===== PROCESS: One upload per audio =====
+      // Pick one random audio → collect videos until duration fills up → merge → upload
+      if (audioFiles.length === 0) {
+        jobs[jobId] = { status: 'error', error: 'Audio Folder-এ কোনো audio নেই' };
+        return;
+      }
+
+      const tempAllFiles = [];
+
+      try {
+        // Pick random audio
+        const randomAudio = audioFiles[Math.floor(Math.random() * audioFiles.length)];
+        console.log('[SCHED] Audio:', randomAudio.name);
+
+        // Download audio
+        const audioDlRes = await fetch(`https://www.googleapis.com/drive/v3/files/${randomAudio.id}?alt=media`, {
+          headers: { 'Authorization': `Bearer ${driveToken}` }
+        });
+        if (!audioDlRes.ok) throw new Error('Audio download failed');
+        const audioPath = path.join(TEMP_DIR, `sched_audio_${Date.now()}${path.extname(randomAudio.name)}`);
+        await new Promise((resolve, reject) => {
+          const fileStream = fs.createWriteStream(audioPath);
+          audioDlRes.body.pipe(fileStream);
+          audioDlRes.body.on('error', reject);
+          fileStream.on('finish', resolve);
+        });
+        tempAllFiles.push(audioPath);
+
+        const audioDuration = await getDuration(audioPath);
+        console.log('[SCHED] Audio duration:', audioDuration, 'sec');
+        if (!audioDuration) throw new Error('Audio duration মাপা গেলো না');
+
+        // Shuffle all videos
+        // Collect videos until total duration fills audio
+        let totalVideoDuration = 0;
+        const selectedVideoPaths = [];
+        const usedDriveVideoIds = []; // track which Drive videos were actually used
+
+        for (const video of videos) {
+          if (totalVideoDuration >= audioDuration) break;
+
+          // Download video (streaming — RAM সাশ্রয়)
+          const dlRes = await fetch(`https://www.googleapis.com/drive/v3/files/${video.id}?alt=media`, {
+            headers: { 'Authorization': `Bearer ${driveToken}` }
+          });
+          if (!dlRes.ok) continue;
+
+          const videoPath = path.join(TEMP_DIR, `sched_v_${Date.now()}_${video.id}.mp4`);
+          await new Promise((resolve, reject) => {
+            const fileStream = fs.createWriteStream(videoPath);
+            dlRes.body.pipe(fileStream);
+            dlRes.body.on('error', reject);
+            fileStream.on('finish', resolve);
+          });
+          tempAllFiles.push(videoPath);
+
+          // Mute video
+          const mutedPath = path.join(TEMP_DIR, `sched_vm_${Date.now()}.mp4`);
+          let workingPath = videoPath;
+          try {
+            await execAsync(`ffmpeg -i "${videoPath}" -an -c:v copy -y "${mutedPath}"`, { timeout: 60000 });
+            tempAllFiles.push(mutedPath);
+            workingPath = mutedPath;
+          } catch { /* use original if mute fails */ }
+
+          const vDur = await getDuration(workingPath);
+          if (!vDur) continue; // skip if can't measure
+
+          totalVideoDuration += vDur;
+          console.log('[SCHED] Video:', video.name, vDur.toFixed(2), 'sec | Total:', totalVideoDuration.toFixed(2));
+
+          // If this video makes total exceed audio → trim it to fit exactly
+          if (totalVideoDuration > audioDuration) {
+            const excess = totalVideoDuration - audioDuration;
+            const trimDur = vDur - excess;
+            if (trimDur > 0.5) {
+              const trimmedPath = path.join(TEMP_DIR, `sched_vt_${Date.now()}.mp4`);
+              try {
+                await execAsync(`ffmpeg -i "${workingPath}" -t ${trimDur.toFixed(3)} -c:v copy -y "${trimmedPath}"`, { timeout: 60000 });
+                tempAllFiles.push(trimmedPath);
+                selectedVideoPaths.push(trimmedPath);
+                usedDriveVideoIds.push(video.id);
+                console.log('[SCHED] Last video trimmed to:', trimDur.toFixed(2), 'sec');
+              } catch {
+                // trim failed — skip this video, don't add (would exceed audio)
+                console.warn('[SCHED] Trim failed, skipping last video');
+              }
+            }
+            // Stop regardless — we've filled the audio duration
+            break;
+          }
+
+          selectedVideoPaths.push(workingPath);
+          usedDriveVideoIds.push(video.id);
+        }
+
+        if (!selectedVideoPaths.length) throw new Error('কোনো video process করা গেলো না');
+        console.log('[SCHED] Total videos collected:', selectedVideoPaths.length);
+
+        // Concat all videos
+        let finalVideoPath;
+        if (selectedVideoPaths.length === 1) {
+          finalVideoPath = selectedVideoPaths[0];
+        } else {
+          // Create concat list file
+          const concatFile = path.join(TEMP_DIR, `sched_concat_${Date.now()}.txt`);
+          fs.writeFileSync(concatFile, selectedVideoPaths.map(p => `file '${p}'`).join('\n'));
+          tempAllFiles.push(concatFile);
+
+          finalVideoPath = path.join(TEMP_DIR, `sched_concat_out_${Date.now()}.mp4`);
+          await execAsync(`ffmpeg -f concat -safe 0 -i "${concatFile}" -c:v copy -y "${finalVideoPath}"`, { timeout: 120000 });
+          tempAllFiles.push(finalVideoPath);
+          console.log('[SCHED] Videos concatenated ✓');
+        }
+
+        // Merge audio with concatenated video
+        const mergedPath = path.join(TEMP_DIR, `sched_final_${Date.now()}.mp4`);
+        await execAsync(`ffmpeg -i "${finalVideoPath}" -i "${audioPath}" -map 0:v -map 1:a -c:v copy -c:a aac -shortest -y "${mergedPath}"`, { timeout: 180000 });
+        tempAllFiles.push(mergedPath);
+        console.log('[SCHED] Final merge done ✓');
+
+        // AI meta — audio filename দেখে title/hashtag/tags
+        const rawTitle = randomAudio.name.replace(/\.[^.]+$/, '').replace(/[_-]/g, ' ').replace(/\d{4}[\s_-]\d{2}[\s_-]\d{2}.*$/, '').replace(/AUDIO/gi, '').replace(/\s+/g, ' ').trim() || 'ইসলামিক ওয়াজ';
+
+        // ===== Full Fallback (AI fail হলেও এটা use হবে) =====
+        const fallbackHashtags = [
+          '#shorts','#islamicshorts','#waz','#islamicvideo','#quran',
+          '#allah','#islam','#muslim','#bangla','#bangladesh',
+          '#viral','#islamicmotivation','#deen','#alhamdulillah','#subhanallah',
+          '#islamiccontent','#islamicquotes','#hadith','#sunnah','#namaz'
+        ];
+        const fallbackTags = [
+          'islamic shorts','bangla waz','islamic motivation','quran','allah',
+          'muslim','bangladesh','viral islamic','waz mahfil','islamic video bangla',
+          'deen','hadith','sunnah','islamic quotes','bangla islamic video',
+          'ওয়াজ','ইসলামিক শর্টস','বাংলা ওয়াজ','ইসলামিক মোটিভেশন','quran recitation',
+          'islamic reminder','allah akbar','subhanallah','alhamdulillah','short islamic video'
+        ];
+        const fallbackTitleOptions = [
+          `☪️ ${rawTitle} | বাংলা ইসলামিক শর্টস`,
+          `🤲 ${rawTitle} | ইসলামিক মোটিভেশন`,
+          `📿 ${rawTitle} | ওয়াজ মাহফিল`,
+          `🕌 ${rawTitle} | বাংলা ওয়াজ`,
+          `✨ ${rawTitle} | ইসলামিক ভিডিও`,
+        ];
+        const fallbackDesc = `আল্লাহর পথে থাকুন, সঠিক পথ বেছে নিন।\nইসলামের আলোয় জীবন সাজান।\nআল্লাহু আকবার ☪️ | সূরা ও হাদিসের আলোকে।`;
+
+        let meta = {
+          title: fallbackTitleOptions[Math.floor(Math.random() * fallbackTitleOptions.length)].substring(0, 100),
+          description: fallbackDesc,
+          hashtags: fallbackHashtags,
+          tags: fallbackTags
+        };
+
+        if (cfg.aiService && cfg.aiKey) {
+          try {
+            const prompt = `You are an expert Islamic YouTube Shorts content creator for a Bengali audience. The audio file name is: "${rawTitle}" (this is the WAZ/MOTIVATION audio title - base your content on this). STRICT RULES: 1) Return ONLY valid JSON, zero explanation, zero markdown backticks. 2) Title: Bengali, emotional/motivational, emoji-rich (☪️🤲📿🕌✨), max 60 chars, inspired by the audio filename meaning. 3) Description: 3 lines Bengali Islamic motivation ending with relevant duas/ayat reference. 4) Hashtags: Mix HIGH volume + NICHE tags. Use these proven viral Islamic hashtags: #shorts #islamicshorts #waz #islamicvideo #quran #allah #islam #muslim #bangla #bangladesh #viral #islamicmotivation #deen #alhamdulillah #subhanallah — then add 5 more relevant to the audio topic. Total exactly 20 hashtags. 5) Tags: Include both Bengali phonetic + English SEO tags. Must include: islamic shorts, bangla waz, islamic motivation, quran, allah, muslim, bangladesh, viral islamic, waz mahfil, islamic video bangla, deen, hadith, sunnah, islamic quotes — then add topic-specific tags. Total exactly 25 tags. Return exactly: {"title":"বাংলা ইসলামিক টাইটেল ☪️","description":"লাইন ১\nলাইন ২\nলাইন ৩","hashtags":["#shorts",...exactly 20],"tags":["islamic shorts",...exactly 25]}`;
+            let aiText = '';
+            if (cfg.aiService === 'gemini') {
+              const ar = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${cfg.aiKey}`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+              });
+              aiText = (await ar.json()).candidates?.[0]?.content?.parts?.[0]?.text || '';
+            } else if (cfg.aiService === 'groq') {
+              const ar = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.aiKey}` },
+                body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'user', content: prompt }], max_tokens: 800 })
+              });
+              aiText = (await ar.json()).choices?.[0]?.message?.content || '';
+            } else if (cfg.aiService === 'grok') {
+              const ar = await fetch('https://api.x.ai/v1/chat/completions', {
+                method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.aiKey}` },
+                body: JSON.stringify({ model: 'grok-3-mini', messages: [{ role: 'user', content: prompt }], max_tokens: 800 })
+              });
+              aiText = (await ar.json()).choices?.[0]?.message?.content || '';
+            }
+            if (aiText) {
+              const parsed = JSON.parse(aiText.replace(/```json\n?/g,'').replace(/```\n?/g,'').trim());
+              // AI সফল হলে replace করো — কিন্তু empty field হলে fallback রাখো
+              meta = {
+                title: parsed.title || meta.title,
+                description: parsed.description || meta.description,
+                hashtags: (parsed.hashtags?.length >= 10) ? parsed.hashtags : meta.hashtags,
+                tags: (parsed.tags?.length >= 10) ? parsed.tags : meta.tags
+              };
+              console.log('[SCHED] AI meta generated ✓');
+            }
+          } catch(e) {
+            console.warn('[SCHED] AI failed, using fallback:', e.message);
+          }
+        }
+
+        // Upload YouTube
+        const fullDesc = `${meta.description || ''}\n\n${(meta.hashtags || []).join(' ')}`.trim();
+        const ytMeta = {
+          snippet: { title: (meta.title || rawTitle).substring(0, 100), description: fullDesc.substring(0, 5000), tags: (meta.tags || []).slice(0, 30), categoryId: '22' },
+          status: { privacyStatus: cfg.privacy || 'private', selfDeclaredMadeForKids: false }
+        };
+
+        const fileSize = fs.statSync(mergedPath).size;
+        const initRes = await fetch('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${ytToken}`, 'Content-Type': 'application/json', 'X-Upload-Content-Type': 'video/mp4', 'X-Upload-Content-Length': fileSize },
+          body: JSON.stringify(ytMeta)
+        });
+        if (!initRes.ok) throw new Error('YT init: ' + await initRes.text());
+
+        const uploadUrl = initRes.headers.get('location');
+        const videoBuf = fs.readFileSync(mergedPath);
+        const upRes = await fetch(uploadUrl, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'video/mp4', 'Content-Length': videoBuf.length },
+          body: videoBuf
+        });
+        if (!upRes.ok) throw new Error('YT upload: ' + await upRes.text());
+        const ytData = await upRes.json();
+
+        // Delete used videos from Drive
+        if (cfg.deleteAfterUpload) {
+          for (const videoId of usedDriveVideoIds) {
+            try {
+              await fetch(`https://www.googleapis.com/drive/v3/files/${videoId}`, {
+                method: 'DELETE', headers: { 'Authorization': `Bearer ${driveToken}` }
+              });
+              console.log('[SCHED] Deleted from Drive:', videoId);
+            } catch {}
+          }
+        }
+
+        // Cleanup temp
+        tempAllFiles.forEach(f => { try { if(fs.existsSync(f)) fs.unlinkSync(f); } catch {} });
+
+        results.push({ audioFile: randomAudio.name, videoCount: selectedVideoPaths.length, videoId: ytData.id, url: `https://youtu.be/${ytData.id}`, title: meta.title, status: 'ok' });
+        console.log('[SCHED] Uploaded:', ytData.id, '| Videos used:', selectedVideoPaths.length);
+
+      } catch(err) {
+        tempAllFiles.forEach(f => { try { if(fs.existsSync(f)) fs.unlinkSync(f); } catch {} });
+        results.push({ error: err.message, status: 'error' });
+        console.error('[SCHED] Error:', err.message);
+      }
+
+      jobs[jobId] = { status: 'done', result: { total: videos.length, results } };
+      console.log('[SCHED] Done!', results.filter(r=>r.status==='ok').length, '/', videos.length, 'uploaded');
+
+    } catch(err) {
+      console.error('[SCHED] Fatal:', err.message);
+      jobs[jobId] = { status: 'error', error: err.message };
+    }
+  })();
+
+  return jobId;
+}
+
+// ========== START ==========
+app.listen(PORT, () => {
+  console.log(`🚀 YouTube Automation Server running on port ${PORT}`);
+  try { require('child_process').execSync('yt-dlp --version'); console.log('✓ yt-dlp available'); } catch { console.warn('✗ yt-dlp not found'); }
+  try { require('child_process').execSync('ffmpeg -version 2>&1 | head -1'); console.log('✓ ffmpeg available'); } catch { console.warn('✗ ffmpeg not found'); }
+
+  // Auto-start scheduler if was enabled
+  const cfg = loadSchedConfig();
+  if (cfg.enabled) {
+    console.log('[SCHED] Auto-starting scheduler from saved config...');
+    startServerScheduler();
+  }
+});
+
+// ========== DRIVE AUTO UPLOAD SYSTEM ==========
+
+
+// Drive token for direct browser upload
+app.get('/api/drive/token', (req, res) => {
+  const t = loadTokens();
+  if (!t.drive_access_token) return res.status(401).json({ error: 'Drive সংযুক্ত নয়' });
+  res.json({ token: t.drive_access_token });
+});
+
+
+app.post('/api/drive/upload-video', upload.single('video'), async (req, res) => {
+  try {
+    const fetch = (await import('node-fetch')).default;
+    const t = loadTokens();
+    const driveToken = t.drive_access_token;
+    if (!driveToken) throw new Error('Drive সংযুক্ত নয়');
+
+    const folderId = req.body.folderId;
+    if (!folderId) throw new Error('Folder ID নেই');
+
+    const file = req.file;
+    if (!file) throw new Error('ফাইল পাওয়া যায়নি');
+
+    const fileName = Buffer.from(file.originalname, 'latin1').toString('utf8');
+    const fileBuffer = fs.readFileSync(file.path);
+    const mimeType = file.mimetype || 'video/mp4';
+
+    // Upload to Drive multipart
+    const metadata = { name: fileName, parents: [folderId] };
+    const boundary = 'vid_boundary_' + Date.now();
+    const metaPart = Buffer.from(`--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(metadata)}\r\n`);
+    const dataPart = Buffer.from(`--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`);
+    const endPart = Buffer.from(`\r\n--${boundary}--`);
+    const body = Buffer.concat([metaPart, dataPart, fileBuffer, endPart]);
+
+    const upRes = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${driveToken}`,
+        'Content-Type': `multipart/related; boundary=${boundary}`,
+        'Content-Length': body.length
+      },
+      body
+    });
+    const upData = await upRes.json();
+
+    // Cleanup temp
+    try { fs.unlinkSync(file.path); } catch {}
+
+    if (!upData.id) throw new Error(upData.error?.message || 'Upload failed');
+    res.json({ success: true, fileId: upData.id, fileName });
+  } catch(err) {
+    if (req.file) try { fs.unlinkSync(req.file.path); } catch {}
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Save downloaded audio to Drive Audio Folder
+app.post('/api/drive/save-audio', async (req, res) => {
+  const { filePath, fileName, audioFolderId } = req.body;
+  try {
+    const fetch = (await import('node-fetch')).default;
+    const t = loadTokens();
+    const driveToken = t.drive_access_token;
+    if (!driveToken) throw new Error('Drive সংযুক্ত নয়');
+    if (!audioFolderId) throw new Error('Audio Folder ID নেই');
+
+    // Find the actual file
+    let actualPath = filePath;
+    if (!actualPath || !fs.existsSync(actualPath)) {
+      // Search in TEMP_DIR
+      const files = fs.readdirSync(TEMP_DIR).filter(f => f.match(/\.(mp3|m4a|wav|aac|ogg|opus)$/i));
+      if (!files.length) throw new Error('Audio ফাইল পাওয়া গেলো না');
+      // Get most recent
+      actualPath = path.join(TEMP_DIR, files.sort((a, b) => {
+        return fs.statSync(path.join(TEMP_DIR, b)).mtime - fs.statSync(path.join(TEMP_DIR, a)).mtime;
+      })[0]);
+    }
+
+    const fileBuffer = fs.readFileSync(actualPath);
+    const ext = path.extname(actualPath) || '.mp3';
+    const cleanName = (fileName || path.basename(actualPath)).replace(/[^\w\s\u0980-\u09FF.-]/g, '').trim() + (fileName?.includes('.') ? '' : ext);
+    const mimeType = ext === '.mp3' ? 'audio/mpeg' : ext === '.m4a' ? 'audio/mp4' : ext === '.wav' ? 'audio/wav' : 'audio/mpeg';
+
+    // Upload to Drive
+    const metadata = { name: cleanName, parents: [audioFolderId] };
+    const boundary = 'audio_boundary_' + Date.now();
+    const metaPart = Buffer.from(`--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(metadata)}\r\n`);
+    const dataPart = Buffer.from(`--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`);
+    const endPart = Buffer.from(`\r\n--${boundary}--`);
+    const body = Buffer.concat([metaPart, dataPart, fileBuffer, endPart]);
+
+    const upRes = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${driveToken}`, 'Content-Type': `multipart/related; boundary=${boundary}`, 'Content-Length': body.length },
+      body
+    });
+    const upData = await upRes.json();
+    if (!upData.id) throw new Error(upData.error?.message || 'Upload failed');
+
+    // Cleanup temp file
+    try { fs.unlinkSync(actualPath); } catch {}
+
+    res.json({ success: true, fileId: upData.id, fileName: cleanName });
+  } catch(err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// List files in Drive folder
+app.get('/api/drive/list', async (req, res) => {
+  const { folderId } = req.query;
+  try {
+    const fetch = (await import('node-fetch')).default;
+    const t = loadTokens();
+    const token = t.drive_access_token || process.env.DRIVE_ACCESS_TOKEN;
+    if (!token) throw new Error('Drive সংযুক্ত নয়');
+
+    const query = folderId
+      ? `'${folderId}' in parents and trashed=false`
+      : `trashed=false`;
+
+    const r = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name,mimeType,size)&pageSize=100`,
+      { headers: { 'Authorization': `Bearer ${token}` } }
+    );
+    const data = await r.json();
+    if (!r.ok) throw new Error(JSON.stringify(data));
+    res.json({ files: data.files || [] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Download file from Drive to temp
+app.post('/api/drive/download', async (req, res) => {
+  const { fileId, fileName } = req.body;
+  try {
+    const fetch = (await import('node-fetch')).default;
+    const t = loadTokens();
+    const token = t.drive_access_token || process.env.DRIVE_ACCESS_TOKEN;
+    if (!token) throw new Error('Drive সংযুক্ত নয়');
+
+    const r = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+      { headers: { 'Authorization': `Bearer ${token}` } }
+    );
+    if (!r.ok) throw new Error('Drive download failed');
+
+    const localPath = path.join(TEMP_DIR, fileName || fileId + '.mp4');
+    const buffer = await r.buffer();
+    fs.writeFileSync(localPath, buffer);
+
+    res.json({ success: true, filepath: localPath, filename: path.basename(localPath) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete file from Drive
+app.post('/api/drive/delete', async (req, res) => {
+  const { fileId } = req.body;
+  try {
+    const fetch = (await import('node-fetch')).default;
+    const t = loadTokens();
+    const token = t.drive_access_token || process.env.DRIVE_ACCESS_TOKEN;
+    if (!token) throw new Error('Drive সংযুক্ত নয়');
+
+    const r = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${fileId}`,
+      { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } }
+    );
+    if (!r.ok && r.status !== 204) throw new Error('Delete failed');
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Full auto: Drive video folder + audio folder → merge → AI meta → YouTube → delete
+app.post('/api/drive/auto-upload', async (req, res) => {
+  const { folderId, audioFolderId, aiService, aiKey, privacy, deleteAfterUpload, maxVideos } = req.body;
+
+  const jobId = createJob();
+  res.json({ jobId, status: 'processing' });
+
+  (async () => {
+    try {
+      const fetch = (await import('node-fetch')).default;
+      const t = loadTokens();
+      const driveToken = t.drive_access_token || process.env.DRIVE_ACCESS_TOKEN;
+      const ytToken = t.access_token || process.env.YT_ACCESS_TOKEN;
+
+      if (!driveToken) throw new Error('Drive সংযুক্ত নয়');
+      if (!ytToken) throw new Error('YouTube সংযুক্ত নয়');
+
+      // Helper: list Drive folder
+      async function listDriveFolder(fid, mimeFilter) {
+        const q = `'${fid}' in parents and trashed=false`;
+        const r = await fetch(
+          `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,size)&pageSize=100`,
+          { headers: { 'Authorization': `Bearer ${driveToken}` } }
+        );
+        const d = await r.json();
+        const files = d.files || [];
+        return mimeFilter ? files.filter(f => (typeof mimeFilter === "string" ? f.mimeType?.includes(mimeFilter) : f.mimeType?.match(mimeFilter)) || f.name?.match(mimeFilter)) : files;
+      }
+
+      // Helper: download from Drive
+      async function downloadFromDrive(fileId, fileName) {
+        const r = await fetch(
+          `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+          { headers: { 'Authorization': `Bearer ${driveToken}` } }
+        );
+        if (!r.ok) throw new Error('Drive download failed: ' + fileName);
+        const localPath = path.join(TEMP_DIR, fileId + '_' + fileName);
+        const buffer = await r.buffer();
+        fs.writeFileSync(localPath, buffer);
+        return localPath;
+      }
+
+      // Helper: delete from Drive
+      async function deleteFromDrive(fileId) {
+        await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
+          method: 'DELETE', headers: { 'Authorization': `Bearer ${driveToken}` }
+        });
+      }
+
+      // Helper: generate AI meta
+      async function generateMeta(title) {
+        if (!aiService || !aiKey) return { title, description: '', hashtags: [], tags: [] };
+        const prompt = `You are an expert Islamic YouTube Shorts content creator for a Bengali audience. The audio file name is: "${rawTitle}" (this is the WAZ/MOTIVATION audio title - base your content on this). STRICT RULES: 1) Return ONLY valid JSON, zero explanation, zero markdown backticks. 2) Title: Bengali, emotional/motivational, emoji-rich (☪️🤲📿🕌✨), max 60 chars, inspired by the audio filename meaning. 3) Description: 3 lines Bengali Islamic motivation ending with relevant duas/ayat reference. 4) Hashtags: Mix HIGH volume + NICHE tags. Use these proven viral Islamic hashtags: #shorts #islamicshorts #waz #islamicvideo #quran #allah #islam #muslim #bangla #bangladesh #viral #islamicmotivation #deen #alhamdulillah #subhanallah — then add 5 more relevant to the audio topic. Total exactly 20 hashtags. 5) Tags: Include both Bengali phonetic + English SEO tags. Must include: islamic shorts, bangla waz, islamic motivation, quran, allah, muslim, bangladesh, viral islamic, waz mahfil, islamic video bangla, deen, hadith, sunnah, islamic quotes — then add topic-specific tags. Total exactly 25 tags. Return exactly: {"title":"বাংলা ইসলামিক টাইটেল ☪️","description":"লাইন ১
+লাইন ২
+লাইন ৩","hashtags":["#shorts",...exactly 20],"tags":["islamic shorts",...exactly 25]}`;
+        let aiText = '';
+        if (aiService === 'gemini') {
+          const ar = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${aiKey}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+          });
+          const ad = await ar.json();
+          aiText = ad.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        } else if (aiService === 'grok') {
+          const ar = await fetch('https://api.x.ai/v1/chat/completions', {
+            method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${aiKey}` },
+            body: JSON.stringify({ model: 'grok-3-mini', messages: [{ role: 'user', content: prompt }], max_tokens: 800 })
+          });
+          const ad = await ar.json();
+          aiText = ad.choices?.[0]?.message?.content || '';
+        } else if (aiService === 'openai') {
+          const ar = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${aiKey}` },
+            body: JSON.stringify({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: prompt }], max_tokens: 800 })
+          });
+          const ad = await ar.json();
+          aiText = ad.choices?.[0]?.message?.content || '';
+        }
+        try {
+          const clean = aiText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+          return JSON.parse(clean);
+        } catch { return { title, description: '', hashtags: [], tags: [] }; }
+      }
+
+      // 1. List videos from Drive
+      console.log('[AUTO] Listing videos from Drive folder:', folderId);
+      const allVideos = await listDriveFolder(folderId, /\.(mp4|mov|avi|mkv|webm)$/i);
+      if (!allVideos.length) throw new Error('Drive ভিডিও ফোল্ডারে কোনো ভিডিও নেই');
+
+      // Shuffle and limit
+      const shuffled = allVideos.sort(() => Math.random() - 0.5);
+      const videos = maxVideos ? shuffled.slice(0, maxVideos) : shuffled;
+      console.log('[AUTO] Found', allVideos.length, 'videos, processing', videos.length);
+
+      // 2. List audios from Drive audio folder (if provided)
+      let audioFiles = [];
+      if (audioFolderId) {
+        audioFiles = await listDriveFolder(audioFolderId, /\.(mp3|m4a|wav|aac|ogg)$/i);
+        console.log('[AUTO] Found', audioFiles.length, 'audio files');
+      }
+
+      const results = [];
+
+      for (const video of videos) {
+        console.log('[AUTO] Processing:', video.name);
+        const tempFiles = [];
+
+        try {
+          // 3. Download video
+          const videoPath = await downloadFromDrive(video.id, video.name);
+          tempFiles.push(videoPath);
+
+          let finalVideoPath = videoPath;
+
+          // 4. Pick random audio and merge
+          if (audioFiles.length > 0) {
+            const randomAudio = audioFiles[Math.floor(Math.random() * audioFiles.length)];
+            console.log('[AUTO] Using audio:', randomAudio.name);
+            const audioPath = await downloadFromDrive(randomAudio.id, randomAudio.name);
+            tempFiles.push(audioPath);
+
+            // Mute original + merge audio
+            const mergedPath = path.join(TEMP_DIR, 'merged_' + Date.now() + '.mp4');
+            tempFiles.push(mergedPath);
+            await execAsync(
+              `ffmpeg -i "${videoPath}" -stream_loop -1 -i "${audioPath}" -map 0:v -map 1:a -c:v copy -c:a aac -shortest -y "${mergedPath}"`,
+              { timeout: 120000 }
+            );
+            finalVideoPath = mergedPath;
+            console.log('[AUTO] Audio merged ✓');
+          }
+
+          // 5. Generate AI meta
+          const videoTitle = video.name.replace(/\.[^.]+$/, '');
+          const meta = await generateMeta(videoTitle);
+          console.log('[AUTO] AI meta:', meta.title);
+
+          // 6. Upload to YouTube
+          const fullDesc = `${meta.description || ''}\n\n${(meta.hashtags || []).join(' ')}`.trim();
+          const ytMeta = {
+            snippet: {
+              title: (meta.title || videoTitle).substring(0, 100),
+              description: fullDesc.substring(0, 5000),
+              tags: (meta.tags || []).slice(0, 30),
+              categoryId: '22'
+            },
+            status: { privacyStatus: privacy || 'private', selfDeclaredMadeForKids: false }
+          };
+
+          const fileSize = fs.statSync(finalVideoPath).size;
+          const initRes = await fetch('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${ytToken}`,
+              'Content-Type': 'application/json',
+              'X-Upload-Content-Type': 'video/mp4',
+              'X-Upload-Content-Length': fileSize
+            },
+            body: JSON.stringify(ytMeta)
+          });
+          if (!initRes.ok) throw new Error('YT init failed: ' + await initRes.text());
+
+          const uploadUrl = initRes.headers.get('location');
+          const videoBuf = fs.readFileSync(finalVideoPath);
+          const upRes = await fetch(uploadUrl, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'video/mp4', 'Content-Length': videoBuf.length },
+            body: videoBuf
+          });
+          if (!upRes.ok) throw new Error('YT upload failed: ' + await upRes.text());
+          const ytData = await upRes.json();
+          console.log('[AUTO] Uploaded to YouTube:', ytData.id);
+
+          // 7. Cleanup temp files
+          tempFiles.forEach(f => { try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch {} });
+
+          // 8. Delete from Drive if needed
+          if (deleteAfterUpload) {
+            await deleteFromDrive(video.id);
+            console.log('[AUTO] Deleted from Drive:', video.name);
+          }
+
+          results.push({ file: video.name, videoId: ytData.id, url: `https://youtu.be/${ytData.id}`, title: meta.title, status: 'ok' });
+
+        } catch (fileErr) {
+          console.error('[AUTO] Error:', video.name, fileErr.message);
+          tempFiles.forEach(f => { try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch {} });
+          results.push({ file: video.name, error: fileErr.message, status: 'error' });
+        }
+
+        // 3 second delay between uploads
+        await new Promise(r => setTimeout(r, 3000));
+      }
+
+      jobs[jobId] = { status: 'done', result: { success: true, total: videos.length, results } };
+      console.log('[AUTO] All done!', results.filter(r => r.status === 'ok').length, '/', videos.length, 'uploaded');
+
+    } catch (err) {
+      console.error('[AUTO] Fatal:', err.message);
+      jobs[jobId] = { status: 'error', error: err.message };
+    }
+  })();
+});
+
+// ========== KUAISHOU DOWNLOADER (HTML scraping) ==========
+app.post('/api/kuaishou/download', async (req, res) => {
+  const { url, mute = true } = req.body;
+  if (!url) return res.status(400).json({ error: 'URL required' });
+
+  const jobId = createJob();
+  res.json({ jobId, status: 'processing' });
+
+  (async () => {
+    try {
+      const fetch = (await import('node-fetch')).default;
+
+      // Step 1: Resolve short URL and get full page HTML
+      const headers = {
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 12; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'Referer': 'https://www.kuaishou.com/'
+      };
+
+      const pageRes = await fetch(url, { redirect: 'follow', headers });
+      const finalUrl = pageRes.url;
+      const html = await pageRes.text();
+      console.log('[KS] Final URL:', finalUrl);
+
+      // Step 2: Extract video URL from HTML
+      let videoUrl = null;
+      let title = 'Kuaishou_video';
+      let thumbnail = null;
+
+      // Extract photoId from URL
+      const photoIdMatch = finalUrl.match(/featured\/(\w+)/) || finalUrl.match(/photoId=([a-zA-Z0-9_-]+)/);
+      if (photoIdMatch) {
+        const photoId = photoIdMatch[1];
+        console.log('[KS] photoId:', photoId);
+
+        // Use working GraphQL endpoint (video.kuaishou.com)
+        try {
+          const gqlRes = await fetch("https://video.kuaishou.com/graphql", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              operationName: "visionVideoDetail",
+              variables: { photoId, page: "selected" },
+              query: "query visionVideoDetail($photoId: String, $type: String, $page: String) { visionVideoDetail(photoId: $photoId, type: $type, page: $page) { photo { id caption coverUrl photoUrl } } }"
+            })
+          });
+          const gqlData = await gqlRes.json();
+          console.log('[KS] GraphQL:', JSON.stringify(gqlData).substring(0, 200));
+          const photo = gqlData?.data?.visionVideoDetail?.photo;
+          if (photo?.photoUrl) {
+            videoUrl = photo.photoUrl;
+            title = (photo.caption || photoId).replace(/\n/g, '').trim();
+            thumbnail = photo.coverUrl || null;
+          }
+        } catch (e) { console.warn('[KS] GraphQL error:', e.message); }
+      }
+
+      // Fallback: try HTML patterns
+      if (!videoUrl) {
+        const patterns = [
+          /"photoUrl"\s*:\s*"([^"]+)"/,
+          /"url"\s*:\s*"(https:\/\/[^"]*\.mp4[^"]*)"/,
+          /<video[^>]+src="([^"]+)"/,
+        ];
+        for (const p of patterns) {
+          const m = html.match(p);
+          if (m && m[1].includes('mp4')) {
+            videoUrl = m[1].replace(/\\u002F/g, '/').replace(/\\/g, '');
+            break;
+          }
+        }
+      }
+
+      const titleM = html.match(/"caption"\s*:\s*"([^"]+)"/) || html.match(/<title>([^<]+)<\/title>/);
+      if (titleM && !title) title = titleM[1].replace(/\s*[-|].*$/, '').trim();
+
+      if (!videoUrl) throw new Error('Video URL বের করা গেলো না। Video private বা region blocked হতে পারে।');
+
+      // Step 3: Download video
+      console.log('[KS] Downloading video:', videoUrl.substring(0, 80));
+      const vidRes = await fetch(videoUrl, {
+        headers: { 'User-Agent': headers['User-Agent'], 'Referer': 'https://www.kuaishou.com/' }
+      });
+      if (!vidRes.ok) throw new Error('Video download failed: HTTP ' + vidRes.status);
+
+      const outPath = path.join(TEMP_DIR, `ks_${jobId}.mp4`);
+      const buffer = await vidRes.buffer();
+      fs.writeFileSync(outPath, buffer);
+
+      // Step 4: Mute
+      let finalPath = outPath;
+      if (mute) {
+        const mutedPath = path.join(TEMP_DIR, `ks_muted_${jobId}.mp4`);
+        await execAsync(`ffmpeg -i "${outPath}" -an -c:v copy -y "${mutedPath}"`, { timeout: 60000 });
+        fs.unlinkSync(outPath);
+        finalPath = mutedPath;
+      }
+
+      const stat = fs.statSync(finalPath);
+      jobs[jobId] = {
+        status: 'done',
+        result: {
+          title: title.substring(0, 100),
+          filename: path.basename(finalPath),
+          filepath: finalPath,
+          thumbnail,
+          size: (stat.size / 1024 / 1024).toFixed(1) + 'MB',
+          source: 'kuaishou'
+        }
+      };
+      console.log('[KS] Done:', title);
+
+    } catch (err) {
+      console.error('[KS]', err.message);
+      jobs[jobId] = { status: 'error', error: err.message };
+    }
+  })();
+});
+
+
+
+// Bulk Kuaishou download
+app.post('/api/kuaishou/bulk', async (req, res) => {
+  const { urls, mute = true } = req.body;
+  if (!urls?.length) return res.status(400).json({ error: 'URLs required' });
+
+  const jobId = createJob();
+  res.json({ jobId, status: 'processing' });
+
+  (async () => {
+    const results = [];
+    for (const url of urls) {
+      try {
+        const fetch = (await import('node-fetch')).default;
+        let photoId = null;
+        const m = url.match(/short-video\/([a-zA-Z0-9_-]+)/);
+        if (m) photoId = m[1];
+        if (!photoId) {
+          const redir = await fetch(url, { redirect: 'follow', headers: { 'User-Agent': 'Mozilla/5.0' } });
+          const fm = redir.url.match(/short-video\/([a-zA-Z0-9_-]+)/);
+          if (fm) photoId = fm[1];
+        }
+        if (!photoId) throw new Error('ID বের হলো না');
+
+        const gqlRes = await fetch('https://www.kuaishou.com/graphql', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.kuaishou.com/' },
+          body: JSON.stringify({
+            operationName: 'visionVideoDetail',
+            variables: { photoId, page: 'selected' },
+            query: `query visionVideoDetail($photoId: String, $type: String, $page: String) { visionVideoDetail(photoId: $photoId, type: $type, page: $page) { photo { id caption coverUrl photoUrl } } }`
+          })
+        });
+        const gqlData = await gqlRes.json();
+        const photo = gqlData?.data?.visionVideoDetail?.photo;
+        if (!photo?.photoUrl) throw new Error('Video URL নেই');
+
+        const outPath = path.join(TEMP_DIR, `ks_bulk_${Date.now()}.mp4`);
+        const vidRes = await fetch(photo.photoUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+        const buf = await vidRes.buffer();
+        fs.writeFileSync(outPath, buf);
+
+        let finalPath = outPath;
+        if (mute) {
+          const mp = path.join(TEMP_DIR, `ks_m_${Date.now()}.mp4`);
+          await execAsync(`ffmpeg -i "${outPath}" -an -c:v copy -y "${mp}"`, { timeout: 60000 });
+          fs.unlinkSync(outPath);
+          finalPath = mp;
+        }
+
+        const stat = fs.statSync(finalPath);
+        results.push({ url, title: photo.caption || photoId, filename: path.basename(finalPath), filepath: finalPath, thumbnail: photo.coverUrl, size: (stat.size/1024/1024).toFixed(1)+'MB', status: 'ok' });
+      } catch (e) {
+        results.push({ url, error: e.message, status: 'error' });
+      }
+      await new Promise(r => setTimeout(r, 1000));
+    }
+    jobs[jobId] = { status: 'done', result: { results } };
+  })();
+});
+
+// ========== ZIP EXTRACT + PROCESS ==========
+// Drive-এ ZIP upload করলে extract করে video process করবে
+app.post('/api/drive/zip-upload', async (req, res) => {
+  const { fileId, fileName, audioFolderId, aiService, aiKey, privacy, deleteAfterUpload } = req.body;
+  if (!fileId) return res.status(400).json({ error: 'fileId required' });
+
+  const jobId = createJob();
+  res.json({ jobId, status: 'processing' });
+
+  (async () => {
+    const tempFiles = [];
+    try {
+      const fetch = (await import('node-fetch')).default;
+      const t = loadTokens();
+      const driveToken = t.drive_access_token;
+      const ytToken = t.access_token;
+      if (!driveToken) throw new Error('Drive সংযুক্ত নয়');
+      if (!ytToken) throw new Error('YouTube সংযুক্ত নয়');
+
+      // 1. Download ZIP from Drive
+      console.log('[ZIP] Downloading ZIP from Drive:', fileId);
+      const dlRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+        headers: { 'Authorization': `Bearer ${driveToken}` }
+      });
+      if (!dlRes.ok) throw new Error('ZIP download failed: ' + dlRes.status);
+
+      const zipPath = path.join(TEMP_DIR, `zip_${jobId}.zip`);
+      const buf = await dlRes.buffer();
+      fs.writeFileSync(zipPath, buf);
+      tempFiles.push(zipPath);
+      console.log('[ZIP] Downloaded:', (buf.length / 1024 / 1024).toFixed(1) + 'MB');
+
+      // 2. Extract ZIP
+      const extractDir = path.join(TEMP_DIR, `zip_extracted_${jobId}`);
+      fs.mkdirSync(extractDir, { recursive: true });
+      tempFiles.push(extractDir);
+
+      await execAsync(`unzip -o "${zipPath}" -d "${extractDir}"`, { timeout: 120000 });
+      console.log('[ZIP] Extracted to:', extractDir);
+
+      // 3. Find all video files
+      const { stdout } = await execAsync(`find "${extractDir}" -type f \\( -name "*.mp4" -o -name "*.mov" -o -name "*.avi" -o -name "*.mkv" -o -name "*.webm" \\)`);
+      const videoFiles = stdout.trim().split('\n').filter(Boolean);
+      console.log('[ZIP] Found', videoFiles.length, 'videos');
+
+      if (!videoFiles.length) throw new Error('ZIP-এ কোনো ভিডিও নেই');
+
+      // 4. Get audio files from Drive if audioFolderId provided
+      let audioFiles = [];
+      if (audioFolderId) {
+        const aq = encodeURIComponent(`'${audioFolderId}' in parents and trashed=false`);
+        const ar = await fetch(`https://www.googleapis.com/drive/v3/files?q=${aq}&fields=files(id,name,mimeType)&pageSize=50`, {
+          headers: { 'Authorization': `Bearer ${driveToken}` }
+        });
+        const ad = await ar.json();
+        audioFiles = (ad.files || []).filter(f => f.name?.match(/\.(mp3|m4a|wav|aac|ogg)$/i));
+        console.log('[ZIP] Found', audioFiles.length, 'audio files in Drive');
+      }
+
+      // 5. Process each video
+      const results = [];
+      for (const videoPath of videoFiles) {
+        const videoName = path.basename(videoPath);
+        const videoTemp = [];
+        console.log('[ZIP] Processing:', videoName);
+
+        try {
+          let finalVideoPath = videoPath;
+
+          // Merge random audio if available
+          if (audioFiles.length > 0) {
+            const randomAudio = audioFiles[Math.floor(Math.random() * audioFiles.length)];
+            
+            // Download audio from Drive
+            const audioDlRes = await fetch(`https://www.googleapis.com/drive/v3/files/${randomAudio.id}?alt=media`, {
+              headers: { 'Authorization': `Bearer ${driveToken}` }
+            });
+            const audioPath = path.join(TEMP_DIR, `audio_${jobId}_${Date.now()}${path.extname(randomAudio.name)}`);
+            fs.writeFileSync(audioPath, await audioDlRes.buffer());
+            videoTemp.push(audioPath);
+
+            const mergedPath = path.join(TEMP_DIR, `merged_${jobId}_${Date.now()}.mp4`);
+            await execAsync(`ffmpeg -i "${finalVideoPath}" -stream_loop -1 -i "${audioPath}" -map 0:v -map 1:a -c:v copy -c:a aac -shortest -y "${mergedPath}"`, { timeout: 120000 });
+            videoTemp.push(mergedPath);
+            finalVideoPath = mergedPath;
+            console.log('[ZIP] Audio merged ✓');
+          }
+
+          // Generate AI meta
+          const rawTitle = videoName.replace(/\.[^.]+$/, '').replace(/[_-]/g, ' ');
+          let meta = { title: rawTitle, description: '', hashtags: [], tags: [] };
+
+          if (aiService && aiKey) {
+            try {
+              const prompt = `You are an expert Islamic YouTube Shorts content creator for a Bengali audience. The audio file name is: "${rawTitle}" (this is the WAZ/MOTIVATION audio title - base your content on this). STRICT RULES: 1) Return ONLY valid JSON, zero explanation, zero markdown backticks. 2) Title: Bengali, emotional/motivational, emoji-rich (☪️🤲📿🕌✨), max 60 chars, inspired by the audio filename meaning. 3) Description: 3 lines Bengali Islamic motivation ending with relevant duas/ayat reference. 4) Hashtags: Mix HIGH volume + NICHE tags. Use these proven viral Islamic hashtags: #shorts #islamicshorts #waz #islamicvideo #quran #allah #islam #muslim #bangla #bangladesh #viral #islamicmotivation #deen #alhamdulillah #subhanallah — then add 5 more relevant to the audio topic. Total exactly 20 hashtags. 5) Tags: Include both Bengali phonetic + English SEO tags. Must include: islamic shorts, bangla waz, islamic motivation, quran, allah, muslim, bangladesh, viral islamic, waz mahfil, islamic video bangla, deen, hadith, sunnah, islamic quotes — then add topic-specific tags. Total exactly 25 tags. Return exactly: {"title":"বাংলা ইসলামিক টাইটেল ☪️","description":"লাইন ১
+লাইন ২
+লাইন ৩","hashtags":["#shorts",...exactly 20],"tags":["islamic shorts",...exactly 25]}`;
+              let aiText = '';
+              if (aiService === 'gemini') {
+                const ar = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${aiKey}`, {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+                });
+                aiText = (await ar.json()).candidates?.[0]?.content?.parts?.[0]?.text || '';
+              } else if (aiService === 'grok') {
+                const ar = await fetch('https://api.x.ai/v1/chat/completions', {
+                  method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${aiKey}` },
+                  body: JSON.stringify({ model: 'grok-3-mini', messages: [{ role: 'user', content: prompt }], max_tokens: 800 })
+                });
+                aiText = (await ar.json()).choices?.[0]?.message?.content || '';
+              } else if (aiService === 'openai') {
+                const ar = await fetch('https://api.openai.com/v1/chat/completions', {
+                  method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${aiKey}` },
+                  body: JSON.stringify({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: prompt }], max_tokens: 800 })
+                });
+                aiText = (await ar.json()).choices?.[0]?.message?.content || '';
+              }
+              if (aiText) {
+                const parsed = JSON.parse(aiText.replace(/```json\n?/g,'').replace(/```\n?/g,'').trim());
+                meta = { ...meta, ...parsed };
+              }
+            } catch(e) { console.warn('[ZIP] AI failed:', e.message); }
+          }
+
+          // Upload to YouTube
+          const fullDesc = `${meta.description || ''}\n\n${(meta.hashtags || []).join(' ')}`.trim();
+          const ytMeta = {
+            snippet: { title: (meta.title || rawTitle).substring(0, 100), description: fullDesc.substring(0, 5000), tags: (meta.tags || []).slice(0, 30), categoryId: '22' },
+            status: { privacyStatus: privacy || 'private', selfDeclaredMadeForKids: false }
+          };
+
+          const fileSize = fs.statSync(finalVideoPath).size;
+          const initRes = await fetch('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${ytToken}`, 'Content-Type': 'application/json', 'X-Upload-Content-Type': 'video/mp4', 'X-Upload-Content-Length': fileSize },
+            body: JSON.stringify(ytMeta)
+          });
+          if (!initRes.ok) throw new Error('YT init: ' + await initRes.text());
+
+          const uploadUrl = initRes.headers.get('location');
+          const videoBuf = fs.readFileSync(finalVideoPath);
+          const upRes = await fetch(uploadUrl, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'video/mp4', 'Content-Length': videoBuf.length },
+            body: videoBuf
+          });
+          if (!upRes.ok) throw new Error('YT upload: ' + await upRes.text());
+          const ytData = await upRes.json();
+
+          videoTemp.forEach(f => { try { if(fs.existsSync(f)) fs.unlinkSync(f); } catch {} });
+          results.push({ file: videoName, videoId: ytData.id, url: `https://youtu.be/${ytData.id}`, title: meta.title, status: 'ok' });
+          console.log('[ZIP] Uploaded:', videoName, '→', ytData.id);
+
+        } catch(e) {
+          videoTemp.forEach(f => { try { if(fs.existsSync(f)) fs.unlinkSync(f); } catch {} });
+          results.push({ file: videoName, error: e.message, status: 'error' });
+          console.error('[ZIP] Error:', videoName, e.message);
+        }
+
+        await new Promise(r => setTimeout(r, 3000));
+      }
+
+      // Cleanup extracted dir and zip
+      tempFiles.forEach(f => {
+        try { if(fs.existsSync(f)) { if(fs.statSync(f).isDirectory()) fs.rmSync(f, {recursive:true}); else fs.unlinkSync(f); } } catch {}
+      });
+
+      // Delete ZIP from Drive if requested
+      if (deleteAfterUpload) {
+        await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
+          method: 'DELETE', headers: { 'Authorization': `Bearer ${driveToken}` }
+        });
+        console.log('[ZIP] Deleted ZIP from Drive');
+      }
+
+      jobs[jobId] = { status: 'done', result: { total: videoFiles.length, results } };
+      console.log('[ZIP] All done!', results.filter(r=>r.status==='ok').length, '/', videoFiles.length);
+
+    } catch(err) {
+      tempFiles.forEach(f => { try { if(fs.existsSync(f)) { if(fs.statSync(f).isDirectory()) fs.rmSync(f,{recursive:true}); else fs.unlinkSync(f); } } catch {} });
+      console.error('[ZIP] Fatal:', err.message);
+      jobs[jobId] = { status: 'error', error: err.message };
+    }
+  })();
+});
