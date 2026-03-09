@@ -627,7 +627,12 @@ async function triggerAutoUpload(cfg) {
         });
         if (!audioDlRes.ok) throw new Error('Audio download failed');
         const audioPath = path.join(TEMP_DIR, `sched_audio_${Date.now()}${path.extname(randomAudio.name)}`);
-        fs.writeFileSync(audioPath, await audioDlRes.buffer());
+        await new Promise((resolve, reject) => {
+          const fileStream = fs.createWriteStream(audioPath);
+          audioDlRes.body.pipe(fileStream);
+          audioDlRes.body.on('error', reject);
+          fileStream.on('finish', resolve);
+        });
         tempAllFiles.push(audioPath);
 
         const audioDuration = await getDuration(audioPath);
@@ -643,14 +648,19 @@ async function triggerAutoUpload(cfg) {
         for (const video of videos) {
           if (totalVideoDuration >= audioDuration) break;
 
-          // Download video
+          // Download video (streaming — RAM সাশ্রয়)
           const dlRes = await fetch(`https://www.googleapis.com/drive/v3/files/${video.id}?alt=media`, {
             headers: { 'Authorization': `Bearer ${driveToken}` }
           });
           if (!dlRes.ok) continue;
 
           const videoPath = path.join(TEMP_DIR, `sched_v_${Date.now()}_${video.id}.mp4`);
-          fs.writeFileSync(videoPath, await dlRes.buffer());
+          await new Promise((resolve, reject) => {
+            const fileStream = fs.createWriteStream(videoPath);
+            dlRes.body.pipe(fileStream);
+            dlRes.body.on('error', reject);
+            fileStream.on('finish', resolve);
+          });
           tempAllFiles.push(videoPath);
 
           // Mute video
