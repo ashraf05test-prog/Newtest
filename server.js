@@ -665,14 +665,37 @@ async function triggerAutoUpload(cfg) {
         console.log('[SCHED] Audio duration:', audioDuration, 'sec');
         if (!audioDuration) throw new Error('Audio duration মাপা গেলো না');
 
-        // Shuffle all videos
-        // Collect videos until total duration fills audio
+        // Shuffle all videos — audio duration পূরণ না হলে repeat করো
         let totalVideoDuration = 0;
         const selectedVideoPaths = [];
-        const usedDriveVideoIds = []; // track which Drive videos were actually used
+        const usedDriveVideoIds = [];
 
-        for (const video of videos) {
-          if (totalVideoDuration >= audioDuration) break;
+        // maxVideos cap করো — shuffle করে নাও
+        const maxV2 = parseInt(cfg.maxVideos) || 5;
+        const shuffledVideos = [...allVideos].sort(() => Math.random() - 0.5);
+        // প্রতিটা video unique ID দিয়ে deduplicate করো
+        const uniqueVideos = Array.from(new Map(shuffledVideos.map(v => [v.id, v])).values());
+        console.log(`[SCHED] Unique videos: ${uniqueVideos.length}`);
+
+        let videoPool = uniqueVideos.slice(0, Math.min(maxV2 * 3, uniqueVideos.length));
+        const usedVideoIds = new Set();
+        let loopCount = 0;
+        while (totalVideoDuration < audioDuration && loopCount < 50) {
+          if (videoPool.length === 0) {
+            // সব use হলে full pool reset — তবে আগেরগুলো শেষে রাখো
+            usedVideoIds.clear();
+            videoPool = [...uniqueVideos].sort(() => Math.random() - 0.5);
+            console.log('[SCHED] Video pool reset');
+          }
+          const video = videoPool.shift();
+          loopCount++;
+          if (!video) break;
+          // Same video skip (যদি অন্য option থাকে)
+          if (usedVideoIds.has(video.id) && videoPool.length > 0) {
+            videoPool.push(video);
+            continue;
+          }
+          usedVideoIds.add(video.id);
 
           // Download video (streaming — RAM সাশ্রয়)
           const dlRes = await fetch(`https://www.googleapis.com/drive/v3/files/${video.id}?alt=media`, {
