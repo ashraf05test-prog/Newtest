@@ -891,6 +891,113 @@ async function triggerAutoUpload(cfg) {
   return jobId;
 }
 
+
+// ========== CHANNEL SHORTS SCRAPER ==========
+app.post('/api/channel/shorts', async (req, res) => {
+  const { channelUrl, maxLinks = 50 } = req.body;
+  if (!channelUrl) return res.status(400).json({ error: 'Channel URL দিন' });
+
+  try {
+    let channelArg = channelUrl.trim();
+
+    // yt-dlp দিয়ে channel-এর shorts list করো (async — event loop block হবে না)
+    const maxP = Math.min(parseInt(maxLinks) || 50, 200);
+    const cmd = `yt-dlp --flat-playlist --playlist-end ${maxP} --print "%(url)s|%(title)s|%(duration)s" "${channelArg}/shorts"`;
+
+    let output = '';
+    try {
+      const result = await execAsync(cmd, { timeout: 60000, maxBuffer: 10 * 1024 * 1024 });
+      output = result.stdout || '';
+    } catch(e) {
+      output = e.stdout?.toString() || '';
+    }
+
+    const links = [];
+    output.split('\n').filter(Boolean).forEach(line => {
+      const parts = line.split('|');
+      const url = parts[0]?.trim();
+      const title = parts[1]?.trim() || '';
+      const duration = parseInt(parts[2]) || 0;
+      if (url && url.includes('youtube') || url?.startsWith('http')) {
+        // Shorts = 60 sec বা কম
+        if (duration <= 60 || duration === 0) {
+          const ytUrl = url.includes('youtube.com') || url.includes('youtu.be') 
+            ? url 
+            : `https://www.youtube.com/shorts/${url}`;
+          links.push({ url: ytUrl, title, duration });
+        }
+      }
+    });
+
+    if (!links.length) {
+      // Fallback: /shorts endpoint try করো
+      try {
+        const cmd2 = `yt-dlp --flat-playlist --playlist-end ${Math.min(parseInt(maxLinks) || 50, 200)} --print "%(url)s|%(title)s|%(duration)s" "${channelArg}/shorts" 2>/dev/null`;
+        const out2 = execSync(cmd2, { timeout: 60000, maxBuffer: 10 * 1024 * 1024 }).toString();
+        out2.split('\n').filter(Boolean).forEach(line => {
+          const parts = line.split('|');
+          const url = parts[0]?.trim();
+          const title = parts[1]?.trim() || '';
+          if (url) links.push({ url: url.startsWith('http') ? url : `https://www.youtube.com/shorts/${url}`, title, duration: 0 });
+        });
+      } catch {}
+    }
+
+    res.json({ links, total: links.length });
+  } catch(err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// ========== DRIVE UPLOAD FROM SERVER PATH ==========
+app.post('/api/drive/upload-to-folder', async (req, res) => {
+  const { filePath, fileName, folderId, driveToken } = req.body;
+  if (!filePath || !folderId) return res.status(400).json({ error: 'filePath and folderId required' });
+  if (!fs.existsSync(filePath)) return res.status(400).json({ error: 'File not found: ' + filePath });
+
+  try {
+    const fetch = (await import('node-fetch')).default;
+    const t = loadTokens();
+    const token = driveToken || t.drive_access_token || process.env.DRIVE_ACCESS_TOKEN;
+    if (!token) throw new Error('Drive token নেই');
+
+    const mime = fileName?.match(/\.(mp3|m4a|wav|aac|ogg)$/i) ? 'audio/mpeg' : 'video/mp4';
+    const fileSize = fs.statSync(filePath).size;
+
+    // Resumable upload init
+    const initRes = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'X-Upload-Content-Type': mime,
+        'X-Upload-Content-Length': fileSize
+      },
+      body: JSON.stringify({ name: fileName || path.basename(filePath), parents: [folderId] })
+    });
+    if (!initRes.ok) throw new Error('Drive init failed: ' + await initRes.text());
+    const uploadUrl = initRes.headers.get('location');
+
+    // Streaming upload — RAM সাশ্রয়
+    const fileStream = fs.createReadStream(filePath);
+    const upRes = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': mime, 'Content-Length': fileSize },
+      body: fileStream
+    });
+    if (!upRes.ok) throw new Error('Drive upload failed: ' + await upRes.text());
+    const data = await upRes.json();
+
+    // Cleanup temp file
+    try { fs.unlinkSync(filePath); } catch {}
+
+    res.json({ success: true, fileId: data.id, name: data.name });
+  } catch(err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ========== SSE LIVE LOG ==========
 const sseClients = new Set();
 
