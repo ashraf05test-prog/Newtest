@@ -1060,7 +1060,7 @@ app.post('/api/thumbnail/generate', async (req, res) => {
 
   try {
     const t = loadTokens();
-    const ytToken = t.yt_access_token || process.env.YT_ACCESS_TOKEN;
+    const ytToken = t.access_token || t.yt_access_token || process.env.YT_ACCESS_TOKEN;
     if (!ytToken) throw new Error('YouTube connected নেই');
 
     // Blank frame দিয়ে thumbnail বানাও (video নেই তাই)
