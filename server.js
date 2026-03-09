@@ -909,6 +909,17 @@ async function triggerAutoUpload(cfg) {
           }
         }
 
+        // Thumbnail generate + upload
+        try {
+          const thumbPath = path.join(TEMP_DIR, `thumb_${ytData.id}.jpg`);
+          const thumbTitle = meta.title || rawTitle;
+          const thumbOk = await generateThumbnail(mergedPath, thumbTitle, thumbPath);
+          if (thumbOk) {
+            await uploadThumbnailToYT(ytData.id, thumbPath, ytToken);
+            try { fs.unlinkSync(thumbPath); } catch {}
+          }
+        } catch(thumbErr) { console.warn('[THUMB] Skipped:', thumbErr.message); }
+
         // Cleanup temp
         tempAllFiles.forEach(f => { try { if(fs.existsSync(f)) fs.unlinkSync(f); } catch {} });
 
@@ -1039,6 +1050,128 @@ app.post('/api/drive/upload-to-folder', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+
+// ========== THUMBNAIL GENERATOR ==========
+async function generateThumbnail(videoPath, title, outputPath) {
+  try {
+    const { execSync } = require('child_process');
+
+    // Step 1: Video থেকে 3 second-এর frame extract করো
+    const framePath = outputPath.replace('.jpg', '_frame.jpg');
+    await execAsync(`ffmpeg -i "${videoPath}" -ss 00:00:03 -vframes 1 -vf "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280" -y "${framePath}"`, { timeout: 30000 });
+
+    if (!fs.existsSync(framePath)) throw new Error('Frame extract failed');
+
+    // Step 2: Python দিয়ে title overlay করো
+    const pyScript = `
+import sys
+from PIL import Image, ImageDraw, ImageFont
+import textwrap, os, re
+
+bg = Image.open('${framePath}')
+bg = bg.resize((720, 1280))
+W, H = 720, 1280
+
+draw = ImageDraw.Draw(bg)
+
+# Bengali font খুঁজো
+font_paths = [
+  '/usr/share/fonts/truetype/kalpurush/Kalpurush.ttf',
+  '/usr/share/fonts/truetype/noto/NotoSansBengali-Bold.ttf',
+  '/usr/share/fonts/opentype/noto/NotoSansBengali-Bold.otf',
+  '/usr/share/fonts/truetype/noto/NotoSansBengali-Regular.ttf',
+  '/usr/share/fonts/truetype/bengali/Lohit-Bengali.ttf',
+  '/usr/share/fonts/truetype/lohit-bengali/Lohit-Bengali.ttf',
+  '/usr/share/fonts/truetype/freefont/FreeSans.ttf',
+  '/usr/share/fonts/opentype/unifont/unifont.otf',
+]
+font_path = None
+for fp in font_paths:
+  if os.path.exists(fp):
+    font_path = fp
+    break
+
+title = """${title.replace(/"/g, '\\"').replace(/\n/g, ' ')}"""
+
+font_big = ImageFont.truetype(font_path, 68) if font_path else ImageFont.load_default()
+
+# Word wrap
+words = title.split()
+lines = []
+line = ""
+for w in words:
+  test = (line + " " + w).strip()
+  bbox = draw.textbbox((0,0), test, font=font_big)
+  if bbox[2]-bbox[0] > 600:
+    if line: lines.append(line)
+    line = w
+  else:
+    line = test
+if line: lines.append(line)
+
+pad_x, pad_y = 28, 20
+line_h = draw.textbbox((0,0),"অ",font=font_big)[3] + 14
+max_w = max((draw.textbbox((0,0),l,font=font_big)[2]-draw.textbbox((0,0),l,font=font_big)[0]) for l in lines)
+box_w = max_w + pad_x*2
+box_h = line_h*len(lines) + pad_y*2
+bx, by = 36, int(H*0.25)
+
+# Shadow
+bg2 = bg.convert('RGBA')
+from PIL import Image as Img2
+sh = Img2.new('RGBA',(W,H),(0,0,0,0))
+from PIL import ImageDraw as ID2
+shd = ID2.Draw(sh)
+shd.rounded_rectangle([(bx+6,by+6),(bx+box_w+6,by+box_h+6)],radius=18,fill=(0,0,0,150))
+bg2 = Img2.alpha_composite(bg2,sh)
+bg = bg2.convert('RGB')
+draw = ImageDraw.Draw(bg)
+
+# Yellow box
+draw.rounded_rectangle([(bx,by),(bx+box_w,by+box_h)],radius=18,fill=(255,225,0))
+
+# Black text
+for i,l in enumerate(lines):
+  tx = bx+pad_x
+  ty = by+pad_y+i*line_h
+  for dx,dy in [(-2,0),(2,0),(0,-2),(0,2)]:
+    draw.text((tx+dx,ty+dy),l,font=font_big,fill=(60,40,0))
+  draw.text((tx,ty),l,font=font_big,fill=(10,10,10))
+
+bg.save('${outputPath}', quality=95)
+print('OK')
+`;
+
+    const result = execSync(`python3 -c "${pyScript.replace(/"/g, '\"')}"`, { timeout: 30000 }).toString();
+    if (fs.existsSync(framePath)) fs.unlinkSync(framePath);
+    return fs.existsSync(outputPath);
+  } catch(e) {
+    console.warn('[THUMB] Generate failed:', e.message);
+    return false;
+  }
+}
+
+async function uploadThumbnailToYT(videoId, thumbPath, ytToken) {
+  try {
+    const fetch = (await import('node-fetch')).default;
+    const fileSize = fs.statSync(thumbPath).size;
+    const initRes = await fetch(`https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId=${videoId}&uploadType=resumable`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${ytToken}`, 'Content-Type': 'application/json', 'X-Upload-Content-Type': 'image/jpeg', 'X-Upload-Content-Length': fileSize }
+    });
+    if (!initRes.ok) throw new Error('Thumb init: ' + await initRes.text());
+    const uploadUrl = initRes.headers.get('location');
+    const stream = fs.createReadStream(thumbPath);
+    const upRes = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': 'image/jpeg', 'Content-Length': fileSize }, body: stream });
+    if (!upRes.ok) throw new Error('Thumb upload: ' + await upRes.text());
+    console.log('[THUMB] Uploaded ✓');
+    return true;
+  } catch(e) {
+    console.warn('[THUMB] Upload failed:', e.message);
+    return false;
+  }
+}
 
 // ========== SSE LIVE LOG ==========
 const sseClients = new Set();
