@@ -1052,6 +1052,103 @@ app.post('/api/drive/upload-to-folder', async (req, res) => {
 });
 
 
+
+// ========== MANUAL THUMBNAIL API ==========
+app.post('/api/thumbnail/generate', async (req, res) => {
+  const { videoId, title } = req.body;
+  if (!videoId || !title) return res.status(400).json({ error: 'videoId and title required' });
+
+  try {
+    const t = loadTokens();
+    const ytToken = t.yt_access_token || process.env.YT_ACCESS_TOKEN;
+    if (!ytToken) throw new Error('YouTube connected নেই');
+
+    // Blank frame দিয়ে thumbnail বানাও (video নেই তাই)
+    const thumbPath = path.join(TEMP_DIR, `thumb_manual_${Date.now()}.jpg`);
+
+    // Plain colored background দিয়ে thumbnail
+    const pyScript = `
+import sys
+from PIL import Image, ImageDraw, ImageFont
+import os
+
+W, H = 720, 1280
+bg = Image.new('RGB', (W, H), (15, 15, 25))
+
+# Gradient
+draw = ImageDraw.Draw(bg)
+for y in range(H):
+    r = int(15 + (y/H)*10)
+    g = int(15 + (y/H)*20)
+    b = int(25 + (y/H)*30)
+    draw.line([(0,y),(W,y)], fill=(r,g,b))
+
+draw = ImageDraw.Draw(bg)
+
+font_paths = [
+  '/usr/share/fonts/truetype/kalpurush/Kalpurush.ttf',
+  '/usr/share/fonts/truetype/noto/NotoSansBengali-Bold.ttf',
+  '/usr/share/fonts/opentype/noto/NotoSansBengali-Bold.otf',
+  '/usr/share/fonts/truetype/bengali/Lohit-Bengali.ttf',
+  '/usr/share/fonts/opentype/unifont/unifont.otf',
+]
+font_path = next((f for f in font_paths if os.path.exists(f)), None)
+font_big = ImageFont.truetype(font_path, 68) if font_path else ImageFont.load_default()
+
+title = """${title.replace(/"/g, '\\"').replace(/\n/g, ' ')}"""
+words = title.split()
+lines = []
+line = ""
+for w in words:
+  test = (line + " " + w).strip()
+  bbox = draw.textbbox((0,0), test, font=font_big)
+  if bbox[2]-bbox[0] > 600:
+    if line: lines.append(line)
+    line = w
+  else:
+    line = test
+if line: lines.append(line)
+
+pad_x, pad_y = 28, 20
+line_h = draw.textbbox((0,0),"অ",font=font_big)[3] + 14
+max_w = max((draw.textbbox((0,0),l,font=font_big)[2]-draw.textbbox((0,0),l,font=font_big)[0]) for l in lines)
+box_w = max_w + pad_x*2
+box_h = line_h*len(lines) + pad_y*2
+bx, by = 36, int(H*0.35)
+
+from PIL import Image as Img2, ImageDraw as ID2
+sh = Img2.new('RGBA',(W,H),(0,0,0,0))
+shd = ID2.Draw(sh)
+shd.rounded_rectangle([(bx+6,by+6),(bx+box_w+6,by+box_h+6)],radius=18,fill=(0,0,0,150))
+bg2 = bg.convert('RGBA')
+bg2 = Img2.alpha_composite(bg2,sh)
+bg = bg2.convert('RGB')
+draw = ImageDraw.Draw(bg)
+draw.rounded_rectangle([(bx,by),(bx+box_w,by+box_h)],radius=18,fill=(255,225,0))
+for i,l in enumerate(lines):
+  tx = bx+pad_x
+  ty = by+pad_y+i*line_h
+  for dx,dy in [(-2,0),(2,0),(0,-2),(0,2)]:
+    draw.text((tx+dx,ty+dy),l,font=font_big,fill=(60,40,0))
+  draw.text((tx,ty),l,font=font_big,fill=(10,10,10))
+
+bg.save('${thumbPath}', quality=95)
+print('OK')
+`;
+    const { execSync } = require('child_process');
+    execSync(`python3 -c "${pyScript.replace(/"/g, '\"')}"`, { timeout: 30000 });
+
+    if (!fs.existsSync(thumbPath)) throw new Error('Thumbnail generate failed');
+
+    await uploadThumbnailToYT(videoId, thumbPath, ytToken);
+    try { fs.unlinkSync(thumbPath); } catch {}
+
+    res.json({ success: true });
+  } catch(err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ========== THUMBNAIL GENERATOR ==========
 async function generateThumbnail(videoPath, title, outputPath) {
   try {
