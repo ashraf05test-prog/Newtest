@@ -268,7 +268,15 @@ textarea.input{resize:none;min-height:80px}
 
 <!-- 3. AUDIO -->
 <div class="panel" id="panel-audio">
+  <!-- YT URL to Audio -->
   <div class="card">
+    <div class="card-title">🎵 YouTube/TikTok → Audio</div>
+    <div style="font-size:12px;color:var(--text2);margin-bottom:10px">URL দিন → audio download হবে এই page-এ</div>
+    <input class="input" id="audioUrlInput" placeholder="https://youtube.com/... বা TikTok URL" style="margin-bottom:8px">
+    <button class="btn btn-full" style="background:#e11d48;color:#fff" onclick="downloadAudioFromUrl()">⬇️ Audio Download করো</button>
+    <div id="audioUrlLog" class="log-box" style="display:none;margin-top:8px;height:80px"></div>
+  </div>
+  <div class="card" style="margin-top:10px">
     <div class="card-title">📱 মোবাইল থেকে Audio → Drive</div>
     <div style="font-size:12px;color:var(--text2);margin-bottom:10px">যেকোনো app দিয়ে waz audio download করো → এখানে select করো → Drive Audio Folder-এ যাবে</div>
     <input type="file" accept="audio/*" multiple id="mobileAudioInput" style="display:none" onchange="uploadMobileAudioToDrive(this)">
@@ -342,6 +350,7 @@ textarea.input{resize:none;min-height:80px}
         <div class="chip on" onclick="setPrivacy(this,'private')">Private</div>
       </div>
     </div>
+    <button class="btn btn-full" style="background:#7c3aed;color:#fff;margin-bottom:8px" onclick="generateAIForUpload()">🤖 AI দিয়ে Title/Hashtag বানাও</button>
     <button class="btn btn-red btn-full" onclick="uploadSelected()">📤 আপলোড করো</button>
   </div>
   <div class="log-box" id="uploadLog" style="height:120px"></div>
@@ -1369,6 +1378,63 @@ async function singleAI(videoId) {
   } catch (err) { toast('AI ত্রুটি: ' + err.message); }
 }
 
+
+// ===== Upload section AI Meta =====
+async function generateAIForUpload() {
+  const s = gs();
+  const apiKey = s.groqKey || s.geminiKey || s.grokKey || s.openaiKey;
+  const service = s.groqKey ? 'groq' : s.geminiKey ? 'gemini' : s.grokKey ? 'grok' : 'openai';
+  if (!apiKey) { toast('Settings-এ AI Key দিন!'); return; }
+  const titleHint = document.getElementById('upTitle').value.trim() || 'ইসলামিক শর্টস';
+  toast('AI বানাচ্ছে...');
+  const prompt = `You are an Islamic YouTube Shorts expert for Bengali audience. Video hint: "${titleHint}". Return ONLY JSON no markdown: {"title":"বাংলা ইসলামিক টাইটেল","description":"লাইন১\nলাইন২\nলাইন৩","hashtags":["#shorts","#islamicshorts","#waz","#islamicvideo","#quran","#allah","#islam","#muslim","#bangla","#bangladesh","#viral","#islamicmotivation","#deen","#alhamdulillah","#subhanallah","#islamiccontent","#islamicquotes","#hadith","#sunnah","#namaz"],"tags":["islamic shorts","bangla waz","islamic motivation","quran","allah","muslim","bangladesh","viral islamic","waz mahfil","islamic video bangla","deen","hadith","sunnah","islamic quotes","bangla islamic video","ওয়াজ","ইসলামিক শর্টস","বাংলা ওয়াজ","ইসলামিক মোটিভেশন","quran recitation","islamic reminder","allah akbar","subhanallah","alhamdulillah","short islamic video"]}`;
+  try {
+    const r = await fetch(getBackend() + '/api/ai-generate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ service, apiKey, prompt })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error);
+    if (data.title) document.getElementById('upTitle').value = data.title;
+    const desc = (data.description || '') + '\n\n' + (data.hashtags || []).join(' ');
+    if (desc.trim()) document.getElementById('upDesc').value = desc.trim();
+    toast('AI meta fill হয়েছে!');
+  } catch(e) { toast('AI ত্রুটি: ' + e.message); }
+}
+
+// ===== Audio URL Download =====
+async function downloadAudioFromUrl() {
+  const url = document.getElementById('audioUrlInput').value.trim();
+  if (!url) { toast('URL দিন!'); return; }
+  const log = document.getElementById('audioUrlLog');
+  log.style.display = 'block';
+  log.textContent = 'Download হচ্ছে...';
+  try {
+    const r = await fetch(getBackend() + '/api/download', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, audioOnly: true })
+    });
+    const { jobId } = await r.json();
+    const start = Date.now();
+    while (Date.now() - start < 120000) {
+      await new Promise(res => setTimeout(res, 3000));
+      const jr = await fetch(getBackend() + '/api/job/' + jobId);
+      const job = await jr.json();
+      if (job.status === 'done') {
+        const d = job.result;
+        S.audios = S.audios || [];
+        S.audios.push({ id: String(Date.now()), name: d.filename || 'audio', filepath: d.filepath, size: d.size });
+        renderAudios();
+        log.textContent = 'Done: ' + (d.filename || 'audio');
+        document.getElementById('audioUrlInput').value = '';
+        return;
+      }
+      if (job.status === 'error') { log.textContent = 'Error: ' + job.error; return; }
+    }
+    log.textContent = 'Timeout';
+  } catch(e) { log.textContent = 'Error: ' + e.message; }
+}
+
 async function autoMeta(v) {
   const s = gs();
   const apiKey = s.geminiKey || s.grokKey || s.openaiKey;
@@ -1509,8 +1575,8 @@ function saveSched() {
     maxVideos: parseInt(document.getElementById('schedMaxVids').value) || 3,
     privacy: document.getElementById('schedPrivacy').value,
     deleteAfterUpload: document.getElementById('schedDeleteToggle').classList.contains('on'),
-    aiService: document.getElementById('schedAIToggle').classList.contains('on') ? (gs().geminiKey ? 'gemini' : gs().grokKey ? 'grok' : gs().openaiKey ? 'openai' : null) : null,
-    aiKey: document.getElementById('schedAIToggle').classList.contains('on') ? (gs().geminiKey || gs().grokKey || gs().openaiKey || null) : null
+    aiService: document.getElementById('schedAIToggle').classList.contains('on') ? (gs().groqKey ? 'groq' : gs().geminiKey ? 'gemini' : gs().grokKey ? 'grok' : gs().openaiKey ? 'openai' : null) : null,
+    aiKey: document.getElementById('schedAIToggle').classList.contains('on') ? (gs().groqKey || gs().geminiKey || gs().grokKey || gs().openaiKey || null) : null
   };
   ss({ schedSlots: SCHED.slots, schedDays: SCHED.days, schedFolderId: cfg.folderId, schedAudioFolderId: cfg.audioFolderId, schedMaxVids: cfg.maxVideos, schedPrivacy: cfg.privacy, schedDeleteAfter: cfg.deleteAfterUpload, schedAI: cfg.aiService !== null, schedEnabled: cfg.enabled });
   fetch(getBackend() + '/api/schedule/save', {
@@ -1611,8 +1677,8 @@ async function runNow() {
     maxVideos: parseInt(document.getElementById('schedMaxVids').value) || 3,
     privacy: document.getElementById('schedPrivacy').value,
     deleteAfterUpload: document.getElementById('schedDeleteToggle').classList.contains('on'),
-    aiService: document.getElementById('schedAIToggle').classList.contains('on') ? (gs().geminiKey ? 'gemini' : gs().grokKey ? 'grok' : gs().openaiKey ? 'openai' : null) : null,
-    aiKey: document.getElementById('schedAIToggle').classList.contains('on') ? (gs().geminiKey || gs().grokKey || gs().openaiKey || null) : null
+    aiService: document.getElementById('schedAIToggle').classList.contains('on') ? (gs().groqKey ? 'groq' : gs().geminiKey ? 'gemini' : gs().grokKey ? 'grok' : gs().openaiKey ? 'openai' : null) : null,
+    aiKey: document.getElementById('schedAIToggle').classList.contains('on') ? (gs().groqKey || gs().geminiKey || gs().grokKey || gs().openaiKey || null) : null
   };
 
   try {
@@ -1633,8 +1699,8 @@ async function runNow() {
         const res = job.result;
         schedLog(`✅ সম্পন্ন! সফল: ${res.results.filter(r=>r.status==='ok').length}/${res.total}`);
         res.results.forEach(r => {
-          if (r.status === 'ok') schedLog(`  ✓ ${r.file} → youtu.be/${r.videoId}`);
-          else schedLog(`  ✗ ${r.file}: ${r.error}`, true);
+          if (r.status === 'ok') schedLog(`  ✓ ${r.audioFile || r.title || 'video'} → youtu.be/${r.videoId}`);
+          else schedLog(`  ✗ ${r.error}`, true);
         });
         break;
       }
