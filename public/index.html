@@ -1451,10 +1451,12 @@ async function downloadAudioFromUrl() {
       const job = await jr.json();
       if (job.status === 'done') {
         const d = job.result;
+        // Title দিয়ে meaningful name
+        const audioName = d.title ? d.title.replace(/[<>:"/\\|?*]/g, '').trim().substring(0, 80) + '.mp3' : (d.filename || 'audio.mp3');
         S.audios = S.audios || [];
-        S.audios.push({ id: String(Date.now()), name: d.filename || 'audio', filepath: d.filepath, size: d.size });
+        S.audios.push({ id: String(Date.now()), name: audioName, filepath: d.filepath, size: d.size });
         renderAudios();
-        log.textContent = 'Done: ' + (d.filename || 'audio');
+        log.textContent = 'Done: ' + audioName;
         document.getElementById('audioUrlInput').value = '';
         return;
       }
@@ -1918,7 +1920,13 @@ async function bulkDownloadToDrive(type) {
         const job = await jr.json();
         if (job.status === 'done') {
           filePath = job.result.filepath;
-          fileName = job.result.filename || job.result.filepath?.split('/').pop() || 'file.mp4';
+          // Audio হলে title দিয়ে meaningful filename বানাও
+          if (type === 'audio' && job.result.title) {
+            const cleanTitle = job.result.title.replace(/[<>:"/\\|?*]/g, '').trim().substring(0, 80);
+            fileName = cleanTitle + '.mp3';
+          } else {
+            fileName = job.result.filename || job.result.filepath?.split('/').pop() || 'file.mp4';
+          }
           break;
         }
         if (job.status === 'error') throw new Error(job.error);
