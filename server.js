@@ -1058,63 +1058,64 @@ app.post('/api/thumbnail/generate', async (req, res) => {
   const { videoId, title } = req.body;
   if (!videoId || !title) return res.status(400).json({ error: 'videoId and title required' });
 
+  const thumbPath = path.join(TEMP_DIR, `thumb_manual_${Date.now()}.jpg`);
+  const pyScriptPath = path.join(TEMP_DIR, `thumb_script_${Date.now()}.py`);
+
   try {
     const t = loadTokens();
     const ytToken = t.access_token || t.yt_access_token || process.env.YT_ACCESS_TOKEN;
     if (!ytToken) throw new Error('YouTube connected নেই');
 
-    // Blank frame দিয়ে thumbnail বানাও (video নেই তাই)
-    const thumbPath = path.join(TEMP_DIR, `thumb_manual_${Date.now()}.jpg`);
-
-    // Plain colored background দিয়ে thumbnail
-    const pyScript = `
-import sys
+    // Python script file-এ লেখো — বাংলা encoding সমস্যা নেই
+    const safeTitle = title.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    const pyScript = `# -*- coding: utf-8 -*-
 from PIL import Image, ImageDraw, ImageFont
 import os
 
 W, H = 720, 1280
 bg = Image.new('RGB', (W, H), (15, 15, 25))
-
-# Gradient
 draw = ImageDraw.Draw(bg)
 for y in range(H):
     r = int(15 + (y/H)*10)
     g = int(15 + (y/H)*20)
     b = int(25 + (y/H)*30)
     draw.line([(0,y),(W,y)], fill=(r,g,b))
-
 draw = ImageDraw.Draw(bg)
 
 font_paths = [
-  '/usr/share/fonts/truetype/kalpurush/Kalpurush.ttf',
+  '/usr/share/fonts/truetype/lohit-bengali/Lohit-Bengali.ttf',
+  '/usr/share/fonts/truetype/fonts-beng-extra/MuktiNarrow.ttf',
   '/usr/share/fonts/truetype/noto/NotoSansBengali-Bold.ttf',
   '/usr/share/fonts/opentype/noto/NotoSansBengali-Bold.otf',
-  '/usr/share/fonts/truetype/bengali/Lohit-Bengali.ttf',
+  '/usr/share/fonts/truetype/noto/NotoSansBengali-Regular.ttf',
   '/usr/share/fonts/opentype/unifont/unifont.otf',
 ]
 font_path = next((f for f in font_paths if os.path.exists(f)), None)
 font_big = ImageFont.truetype(font_path, 68) if font_path else ImageFont.load_default()
 
-title = """${title.replace(/"/g, '\\"').replace(/\n/g, ' ')}"""
+title = '${safeTitle}'
 words = title.split()
 lines = []
 line = ""
 for w in words:
-  test = (line + " " + w).strip()
-  bbox = draw.textbbox((0,0), test, font=font_big)
-  if bbox[2]-bbox[0] > 600:
-    if line: lines.append(line)
-    line = w
-  else:
-    line = test
+    test = (line + " " + w).strip()
+    bbox = draw.textbbox((0,0), test, font=font_big)
+    if bbox[2]-bbox[0] > 620:
+        if line: lines.append(line)
+        line = w
+    else:
+        line = test
 if line: lines.append(line)
 
 pad_x, pad_y = 28, 20
 line_h = draw.textbbox((0,0),"অ",font=font_big)[3] + 14
-max_w = max((draw.textbbox((0,0),l,font=font_big)[2]-draw.textbbox((0,0),l,font=font_big)[0]) for l in lines)
+if lines:
+    max_w = max((draw.textbbox((0,0),l,font=font_big)[2]-draw.textbbox((0,0),l,font=font_big)[0]) for l in lines)
+else:
+    max_w = 400
 box_w = max_w + pad_x*2
 box_h = line_h*len(lines) + pad_y*2
-bx, by = 36, int(H*0.35)
+bx, by = 36, int(H*0.30)
 
 from PIL import Image as Img2, ImageDraw as ID2
 sh = Img2.new('RGBA',(W,H),(0,0,0,0))
@@ -1126,17 +1127,20 @@ bg = bg2.convert('RGB')
 draw = ImageDraw.Draw(bg)
 draw.rounded_rectangle([(bx,by),(bx+box_w,by+box_h)],radius=18,fill=(255,225,0))
 for i,l in enumerate(lines):
-  tx = bx+pad_x
-  ty = by+pad_y+i*line_h
-  for dx,dy in [(-2,0),(2,0),(0,-2),(0,2)]:
-    draw.text((tx+dx,ty+dy),l,font=font_big,fill=(60,40,0))
-  draw.text((tx,ty),l,font=font_big,fill=(10,10,10))
+    tx = bx+pad_x
+    ty = by+pad_y+i*line_h
+    for dx,dy in [(-2,0),(2,0),(0,-2),(0,2)]:
+        draw.text((tx+dx,ty+dy),l,font=font_big,fill=(60,40,0))
+    draw.text((tx,ty),l,font=font_big,fill=(10,10,10))
 
 bg.save('${thumbPath}', quality=95)
 print('OK')
 `;
+
+    fs.writeFileSync(pyScriptPath, pyScript, 'utf8');
     const { execSync } = require('child_process');
-    execSync(`python3 -c "${pyScript.replace(/"/g, '\"')}"`, { timeout: 30000 });
+    execSync(`python3 "${pyScriptPath}"`, { timeout: 30000 });
+    try { fs.unlinkSync(pyScriptPath); } catch {}
 
     if (!fs.existsSync(thumbPath)) throw new Error('Thumbnail generate failed');
 
@@ -1145,105 +1149,92 @@ print('OK')
 
     res.json({ success: true });
   } catch(err) {
+    try { fs.unlinkSync(pyScriptPath); } catch {}
+    try { fs.unlinkSync(thumbPath); } catch {}
     res.status(500).json({ error: err.message });
   }
 });
 
 // ========== THUMBNAIL GENERATOR ==========
 async function generateThumbnail(videoPath, title, outputPath) {
+  const framePath = outputPath.replace('.jpg', '_frame.jpg');
+  const pyScriptPath = outputPath.replace('.jpg', '_script.py');
   try {
     const { execSync } = require('child_process');
 
-    // Step 1: Video থেকে 3 second-এর frame extract করো
-    const framePath = outputPath.replace('.jpg', '_frame.jpg');
+    // Step 1: frame extract
     await execAsync(`ffmpeg -i "${videoPath}" -ss 00:00:03 -vframes 1 -vf "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280" -y "${framePath}"`, { timeout: 30000 });
-
     if (!fs.existsSync(framePath)) throw new Error('Frame extract failed');
 
-    // Step 2: Python দিয়ে title overlay করো
-    const pyScript = `
-import sys
-from PIL import Image, ImageDraw, ImageFont
-import textwrap, os, re
+    // Step 2: Python script file-এ লেখো — বাংলা encoding safe
+    const safeTitle = title.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    const pyLines = [
+      '# -*- coding: utf-8 -*-',
+      'from PIL import Image, ImageDraw, ImageFont',
+      'import os',
+      `bg = Image.open('${framePath}')`,
+      'bg = bg.resize((720, 1280))',
+      'W, H = 720, 1280',
+      'draw = ImageDraw.Draw(bg)',
+      'font_paths = [',
+      "  '/usr/share/fonts/truetype/lohit-bengali/Lohit-Bengali.ttf',",
+      "  '/usr/share/fonts/truetype/fonts-beng-extra/MuktiNarrow.ttf',",
+      "  '/usr/share/fonts/truetype/noto/NotoSansBengali-Bold.ttf',",
+      "  '/usr/share/fonts/opentype/noto/NotoSansBengali-Bold.otf',",
+      "  '/usr/share/fonts/opentype/unifont/unifont.otf',",
+      ']',
+      'font_path = next((f for f in font_paths if os.path.exists(f)), None)',
+      'font_big = ImageFont.truetype(font_path, 68) if font_path else ImageFont.load_default()',
+    ];
+    pyLines.push(`title = '${safeTitle}'`);
+    pyLines.push(
+      'words = title.split()',
+      'lines = []',
+      'line = ""',
+      'for w in words:',
+      '    test = (line + " " + w).strip()',
+      '    bbox = draw.textbbox((0,0), test, font=font_big)',
+      '    if bbox[2]-bbox[0] > 620:',
+      '        if line: lines.append(line)',
+      '        line = w',
+      '    else:',
+      '        line = test',
+      'if line: lines.append(line)',
+      'if not lines: lines = ["title"]',
+      'pad_x, pad_y = 28, 20',
+      'line_h = draw.textbbox((0,0), lines[0], font=font_big)[3] + 14',
+      'max_w = max((draw.textbbox((0,0),l,font=font_big)[2]-draw.textbbox((0,0),l,font=font_big)[0]) for l in lines)',
+      'box_w = max_w + pad_x*2',
+      'box_h = line_h*len(lines) + pad_y*2',
+      'bx, by = 36, int(H*0.25)',
+      'from PIL import Image as Img2, ImageDraw as ID2',
+      'sh = Img2.new("RGBA",(W,H),(0,0,0,0))',
+      'shd = ID2.Draw(sh)',
+      'shd.rounded_rectangle([(bx+6,by+6),(bx+box_w+6,by+box_h+6)],radius=18,fill=(0,0,0,150))',
+      'bg2 = bg.convert("RGBA")',
+      'bg2 = Img2.alpha_composite(bg2,sh)',
+      'bg = bg2.convert("RGB")',
+      'draw = ImageDraw.Draw(bg)',
+      'draw.rounded_rectangle([(bx,by),(bx+box_w,by+box_h)],radius=18,fill=(255,225,0))',
+      'for i,l in enumerate(lines):',
+      '    tx = bx+pad_x',
+      '    ty = by+pad_y+i*line_h',
+      '    for dx,dy in [(-2,0),(2,0),(0,-2),(0,2)]:',
+      '        draw.text((tx+dx,ty+dy),l,font=font_big,fill=(60,40,0))',
+      '    draw.text((tx,ty),l,font=font_big,fill=(10,10,10))',
+    );
+    pyLines.push(`bg.save('${outputPath}', quality=95)`);
+    pyLines.push('print("OK")');
 
-bg = Image.open('${framePath}')
-bg = bg.resize((720, 1280))
-W, H = 720, 1280
-
-draw = ImageDraw.Draw(bg)
-
-# Bengali font খুঁজো
-font_paths = [
-  '/usr/share/fonts/truetype/lohit-bengali/Lohit-Bengali.ttf',
-  '/usr/share/fonts/truetype/fonts-beng-extra/MuktiNarrow.ttf',
-  '/usr/share/fonts/truetype/noto/NotoSansBengali-Bold.ttf',
-  '/usr/share/fonts/opentype/noto/NotoSansBengali-Bold.otf',
-  '/usr/share/fonts/truetype/noto/NotoSansBengali-Regular.ttf',
-  '/usr/share/fonts/truetype/freefont/FreeSans.ttf',
-  '/usr/share/fonts/opentype/unifont/unifont.otf',
-]
-font_path = None
-for fp in font_paths:
-  if os.path.exists(fp):
-    font_path = fp
-    break
-
-title = """${title.replace(/"/g, '\\"').replace(/\n/g, ' ')}"""
-
-font_big = ImageFont.truetype(font_path, 68) if font_path else ImageFont.load_default()
-
-# Word wrap
-words = title.split()
-lines = []
-line = ""
-for w in words:
-  test = (line + " " + w).strip()
-  bbox = draw.textbbox((0,0), test, font=font_big)
-  if bbox[2]-bbox[0] > 600:
-    if line: lines.append(line)
-    line = w
-  else:
-    line = test
-if line: lines.append(line)
-
-pad_x, pad_y = 28, 20
-line_h = draw.textbbox((0,0),"অ",font=font_big)[3] + 14
-max_w = max((draw.textbbox((0,0),l,font=font_big)[2]-draw.textbbox((0,0),l,font=font_big)[0]) for l in lines)
-box_w = max_w + pad_x*2
-box_h = line_h*len(lines) + pad_y*2
-bx, by = 36, int(H*0.25)
-
-# Shadow
-bg2 = bg.convert('RGBA')
-from PIL import Image as Img2
-sh = Img2.new('RGBA',(W,H),(0,0,0,0))
-from PIL import ImageDraw as ID2
-shd = ID2.Draw(sh)
-shd.rounded_rectangle([(bx+6,by+6),(bx+box_w+6,by+box_h+6)],radius=18,fill=(0,0,0,150))
-bg2 = Img2.alpha_composite(bg2,sh)
-bg = bg2.convert('RGB')
-draw = ImageDraw.Draw(bg)
-
-# Yellow box
-draw.rounded_rectangle([(bx,by),(bx+box_w,by+box_h)],radius=18,fill=(255,225,0))
-
-# Black text
-for i,l in enumerate(lines):
-  tx = bx+pad_x
-  ty = by+pad_y+i*line_h
-  for dx,dy in [(-2,0),(2,0),(0,-2),(0,2)]:
-    draw.text((tx+dx,ty+dy),l,font=font_big,fill=(60,40,0))
-  draw.text((tx,ty),l,font=font_big,fill=(10,10,10))
-
-bg.save('${outputPath}', quality=95)
-print('OK')
-`;
-
-    const result = execSync(`python3 -c "${pyScript.replace(/"/g, '\"')}"`, { timeout: 30000 }).toString();
-    if (fs.existsSync(framePath)) fs.unlinkSync(framePath);
+    fs.writeFileSync(pyScriptPath, pyLines.join('\n'), 'utf8');
+    execSync(`python3 "${pyScriptPath}"`, { timeout: 30000 });
+    try { fs.unlinkSync(pyScriptPath); } catch {}
+    try { fs.unlinkSync(framePath); } catch {}
     return fs.existsSync(outputPath);
   } catch(e) {
     console.warn('[THUMB] Generate failed:', e.message);
+    try { fs.unlinkSync(pyScriptPath); } catch {}
+    try { fs.unlinkSync(framePath); } catch {}
     return false;
   }
 }
