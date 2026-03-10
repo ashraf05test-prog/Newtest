@@ -461,15 +461,21 @@ async function refreshDriveToken() {
 }
 
 async function getValidYTToken() {
+  // Always refresh first — token may be expired
+  const refreshed = await refreshYouTubeToken();
+  if (refreshed) return refreshed;
+  // Fallback to stored token
   const t = loadTokens();
-  if (t.access_token) return t.access_token;
-  return await refreshYouTubeToken();
+  return t.access_token || null;
 }
 
 async function getValidDriveToken() {
+  // Always refresh first — token may be expired
+  const refreshed = await refreshDriveToken();
+  if (refreshed) return refreshed;
+  // Fallback to stored token
   const t = loadTokens();
-  if (t.drive_access_token) return t.drive_access_token;
-  return await refreshDriveToken();
+  return t.drive_access_token || null;
 }
 
 async function restoreTokensFromDrive() {
