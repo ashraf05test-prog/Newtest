@@ -1463,12 +1463,16 @@ async function uploadThumbnailToYT(videoId, thumbPath, ytToken) {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${ytToken}`, 'Content-Type': 'application/json', 'X-Upload-Content-Type': 'image/jpeg', 'X-Upload-Content-Length': fileSize }
     });
-    if (!initRes.ok) throw new Error('Thumb init: ' + await initRes.text());
+    const initText = await initRes.text();
+    if (!initRes.ok) throw new Error('Thumb init: ' + initText);
     const uploadUrl = initRes.headers.get('location');
-    const stream = fs.createReadStream(thumbPath);
-    const upRes = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': 'image/jpeg', 'Content-Length': fileSize }, body: stream });
-    if (!upRes.ok) throw new Error('Thumb upload: ' + await upRes.text());
-    console.log('[THUMB] Uploaded ✓');
+    if (!uploadUrl) throw new Error('Thumb: no upload URL. Response: ' + initText);
+    console.log('[THUMB] Upload URL ok, uploading image...');
+    const imgBuffer = fs.readFileSync(thumbPath);
+    const upRes = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': 'image/jpeg', 'Content-Length': fileSize }, body: imgBuffer });
+    const upText = await upRes.text();
+    if (!upRes.ok) throw new Error('Thumb upload: ' + upText);
+    console.log('[THUMB] Uploaded ✓ Response:', upText.substring(0, 100));
     return true;
   } catch(e) {
     console.warn('[THUMB] Upload failed:', e.message);
