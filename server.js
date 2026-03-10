@@ -732,25 +732,23 @@ async function triggerAutoUpload(cfg) {
         const uniqueVideos = Array.from(new Map(shuffledVideos.map(v => [v.id, v])).values());
         console.log(`[SCHED] Unique videos: ${uniqueVideos.length}`);
 
-        let videoPool = [...uniqueVideos];
-        const usedVideoIds = new Set();
+        const recentlyUsed = [];
+        let videoPool = [...uniqueVideos].sort(() => Math.random() - 0.5);
         let loopCount = 0;
         while (totalVideoDuration < audioDuration && loopCount < 50) {
           if (videoPool.length === 0) {
-            // সব use হলে full pool reset — তবে আগেরগুলো শেষে রাখো
-            usedVideoIds.clear();
-            videoPool = [...uniqueVideos].sort(() => Math.random() - 0.5);
+            // সব use হলে reset — recently used গুলো শেষে রাখো
+            const recentIds = new Set(recentlyUsed.slice(-3).map(v => v.id));
+            const fresh = uniqueVideos.filter(v => !recentIds.has(v.id)).sort(() => Math.random() - 0.5);
+            const recent = uniqueVideos.filter(v => recentIds.has(v.id)).sort(() => Math.random() - 0.5);
+            videoPool = [...fresh, ...recent];
+            recentlyUsed.length = 0;
             console.log('[SCHED] Video pool reset');
           }
           const video = videoPool.shift();
           loopCount++;
           if (!video) break;
-          // Same video skip (যদি অন্য option থাকে)
-          if (usedVideoIds.has(video.id) && videoPool.length > 0) {
-            videoPool.push(video);
-            continue;
-          }
-          usedVideoIds.add(video.id);
+          recentlyUsed.push(video);
 
           // Download video (streaming — RAM সাশ্রয়)
           const dlRes = await fetch(`https://www.googleapis.com/drive/v3/files/${video.id}?alt=media`, {
@@ -831,6 +829,23 @@ async function triggerAutoUpload(cfg) {
         await execAsync(`ffmpeg -i "${finalVideoPath}" -i "${audioPath}" -map 0:v -map 1:a -c:v copy -c:a aac -shortest -y "${mergedPath}"`, { timeout: 180000 });
         tempAllFiles.push(mergedPath);
         console.log('[SCHED] Final merge done ✓');
+
+        // Text overlay মাঝখানে ৪ সেকেন্ড
+        const totalDur = await getDuration(mergedPath);
+        const textStart = Math.max(0, (totalDur / 2) - 2).toFixed(2);
+        const textEnd = (parseFloat(textStart) + 4).toFixed(2);
+        const textVideo = path.join(TEMP_DIR, `sched_text_${Date.now()}.mp4`);
+        const overlayText = 'ভিডিওটি ভালো লাগলে লাইক ও সাবস্ক্রাইব করুন';
+        const drawtext = `drawtext=text='${overlayText}':fontfile=/tmp/fonts/NotoSansBengali.ttf:fontsize=28:fontcolor=white:borderw=2:bordercolor=black:x=(w-text_w)/2:y=h-100:enable='between(t,${textStart},${textEnd})'`;
+        try {
+          await execAsync(`ffmpeg -i "${mergedPath}" -vf "${drawtext}" -c:v libx264 -preset ultrafast -c:a copy -y "${textVideo}"`, { timeout: 180000 });
+          tempAllFiles.push(textVideo);
+          console.log('[SCHED] Text overlay done ✓');
+          // mergedPath replace করো
+          fs.renameSync(textVideo, mergedPath);
+        } catch(e) {
+          console.warn('[SCHED] Text overlay failed, using without text:', e.message);
+        }
 
         // AI meta — audio filename দেখে title/hashtag/tags
         // Audio filename থেকে clean title বের করো
